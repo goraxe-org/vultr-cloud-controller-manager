@@ -48,7 +48,7 @@ jobs:
   build-and-push-image:
     needs: [ semantic-release, pre-commit ]
     runs-on: ubuntu-latest
-    if: ${{ needs.semantic-release.outputs.new-release-published}}
+    if: ${{ needs.semantic-release.outputs.new-release-published == true}}
 
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
 
