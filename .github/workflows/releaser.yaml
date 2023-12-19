@@ -89,10 +89,8 @@ jobs:
         with:
           context: .
           push: true
-          build-args:
-            [
-              "VERSION=${{ needs.semantic-release.outputs.release-version }}"
-            ]
+          build-args: |
+            "VERSION=${{ needs.semantic-release.outputs.release-version }}"
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
