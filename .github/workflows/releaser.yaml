@@ -48,7 +48,9 @@ jobs:
   build-and-push-image:
     needs: [ semantic-release, pre-commit ]
     runs-on: ubuntu-latest
-    if: # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
+    if: ${{ needs.semantic-release.outputs.new-release-published}}
+
+    # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
 
     permissions:
       contents: read
@@ -90,7 +92,7 @@ jobs:
           context: .
           push: true
           build-args: |
-            "VERSION=${{ needs.semantic-release.outputs.release-version }}"
+            VERSION=${{ needs.semantic-release.outputs.release-version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
