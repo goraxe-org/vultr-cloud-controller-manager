@@ -1,3 +1,10 @@
+## [0.10.3](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.2...v0.10.3) (2023-12-19)
+
+
+### Bug Fixes
+
+* entrypoint for controller (again) ([700cacd](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/700cacd7d036e8fb3682426a2d3b11e4a0fac56b))
+
 ## [0.10.2](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.1...v0.10.2) (2023-12-19)
 
 
