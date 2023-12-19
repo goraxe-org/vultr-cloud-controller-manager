@@ -11,4 +11,4 @@ FROM alpine:3.19.0
 RUN apk add --no-cache ca-certificates=20230506-r0
 
 COPY --from=build /workspace/vultr-cloud-controller-manager /usr/local/bin/vultr-cloud-controller-manager
-ENTRYPOINT ["vultr-cloud-controller-manager"]
+ENTRYPOINT ["/usr/local/bin/vultr-cloud-controller-manager"]
