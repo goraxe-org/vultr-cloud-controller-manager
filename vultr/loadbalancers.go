@@ -87,8 +87,10 @@ const (
 	lbStatusActive = "active"
 )
 
-var errLbNotFound = fmt.Errorf("loadbalancer not found")
-var _ cloudprovider.LoadBalancer = &loadbalancers{}
+var (
+	errLbNotFound                            = fmt.Errorf("loadbalancer not found")
+	_             cloudprovider.LoadBalancer = &loadbalancers{}
+)
 
 type loadbalancers struct {
 	client *govultr.Client
@@ -327,7 +329,7 @@ func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v
 		return nil, err
 	}
 
-	klog.V(3).Infof("node count is currently %d\n", nodeCount)
+	klog.V(logLevel).Infof("node count is currently %d\n", nodeCount)
 
 	if count, ok := service.Annotations[annoVultrNodeCount]; ok {
 		nodeCount, err = strconv.Atoi(count)
@@ -339,7 +341,7 @@ func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v
 			return nil, fmt.Errorf("%s must be odd", annoVultrNodeCount)
 		}
 
-		klog.V(3).Infof("setting node count to %d\n", nodeCount) //nolint
+		klog.V(logLevel).Infof("setting node count to %d\n", nodeCount) //nolint
 	}
 
 	return &govultr.LoadBalancerReq{
