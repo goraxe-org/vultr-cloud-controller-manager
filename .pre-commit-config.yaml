@@ -1,5 +1,6 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
+exclude: ^vendor/.*$
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
@@ -7,6 +8,8 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        args:
+          - --allow-multiple-documents
       - id: check-added-large-files
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.10.0
@@ -28,9 +31,10 @@ repos:
       - id: markdown-toc
         # optional custom config:
         args: [ --indent, "    ", -i ]
-      - id: dockerfile_lint
-        # optional custom config:
-        args: [ --json, --verbose, --dockerfile ]
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
   - repo: https://github.com/bridgecrewio/checkov.git
     rev: 3.1.33
     hooks:
@@ -47,4 +51,4 @@ repos:
     rev: v1.4.0
     hooks:
       - id: detect-secrets
-        exclude: pnpm-lock.yaml
+        exclude: pnpm-lock.yaml|vendor/.*

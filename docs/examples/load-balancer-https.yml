@@ -16,5 +16,3 @@ spec:
       name: "http"
     - port: 443
       name: "https"
-
-

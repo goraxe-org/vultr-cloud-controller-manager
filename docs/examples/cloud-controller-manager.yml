@@ -5,7 +5,7 @@ metadata:
   namespace: kube-system
 stringData:
   # Replace the api-key
-  api-key: {{ VULTR_API_KEY }}
+  api-key: "{{ VULTR_API_KEY }}"
 ---
 apiVersion: v1
 kind: ServiceAccount
