@@ -723,7 +723,7 @@ func (l *loadbalancers) GetSSL(service *v1.Service, secretName string) (*govultr
 	key = strings.TrimSpace(key)
 
 	ssl := govultr.SSL{
-    PrivateKey:  key, // pragma: allowlist secret
+		PrivateKey:  key, // pragma: allowlist secret
 		Certificate: cert,
 	}
 	return &ssl, nil
