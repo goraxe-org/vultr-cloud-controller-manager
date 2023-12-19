@@ -37,8 +37,8 @@ jobs:
       - uses: codfish/semantic-release-action@v3
         id: semantic
         with:
-          dry_run: true
-          additional_packages: |
+          dry-run: true
+          additional-packages: |
             ['@semantic-release/changelog', '@semantic-release/git']
           plugins: |
             ['@semantic-release/commit-analyzer', '@semantic-release/release-notes-generator', '@semantic-release/github', '@semantic-release/changelog', '@semantic-release/git']
@@ -104,7 +104,7 @@ jobs:
       - uses: codfish/semantic-release-action@v3
         id: semantic
         with:
-          additional_packages: |
+          additional-packages: |
             ['@semantic-release/changelog', '@semantic-release/git']
           plugins: |
             ['@semantic-release/commit-analyzer', '@semantic-release/release-notes-generator', '@semantic-release/github', '@semantic-release/changelog', '@semantic-release/git']
