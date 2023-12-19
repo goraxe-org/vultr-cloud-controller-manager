@@ -1,3 +1,12 @@
+## [0.10.1](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.0...v0.10.1) (2023-12-19)
+
+
+### Bug Fixes
+
+* ensure use of logging constant ([d3aa960](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/d3aa960ea115cbab54b624f69ca2e8835759ee26))
+* update dockerfile ([eafda92](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/eafda92828da901c8232534ae8f9ffdb31a13505))
+* update dockerfile ([4a5558a](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/4a5558acd340d110ae12053aa83156e3aa045d6a))
+
 # Change Log
 ## [v0.10.1](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.10.0...v0.10.1) (2023-11-27)
 * Fix bug with VLB node annotation failing to be set [PR #220](https://github.com/vultr/vultr-cloud-controller-manager/pull/220)
