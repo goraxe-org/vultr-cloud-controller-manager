@@ -589,16 +589,21 @@ func getHealthCheckHealthy(service *v1.Service) (int, error) {
 // buildInstanceList create list of nodes to be attached to a load balancer
 func buildInstanceList(nodes []*v1.Node) ([]string, error) {
 	var list []string
+	var errs []error
 
 	for _, node := range nodes {
 		instanceID, err := vultrIDFromProviderID(node.Spec.ProviderID)
 		if err != nil {
-			return nil, fmt.Errorf("error getting the provider ID %s : %s", node.Spec.ProviderID, err)
+			errs = append(errs, fmt.Errorf("error getting the provider ID %s : %s", node.Spec.ProviderID, err))
+			continue
 		}
 
 		list = append(list, instanceID)
 	}
 
+	if len(list) == 0 {
+		return list, fmt.Errorf("no nodes found")
+	}
 	return list, nil
 }
 
