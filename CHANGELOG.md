@@ -1,3 +1,10 @@
+## [0.10.4](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.3...v0.10.4) (2024-01-15)
+
+
+### Bug Fixes
+
+* **loadbalancers:** ignore node if there is no provider ID ([67a88f0](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/67a88f0d44becbd97c6a3ee122015f0bc41ba227))
+
 ## [0.10.3](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.2...v0.10.3) (2023-12-19)
 
 
