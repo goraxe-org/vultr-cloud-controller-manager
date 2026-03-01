@@ -1,3 +1,12 @@
+## [0.10.5](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.4...v0.10.5) (2026-03-01)
+
+
+### Bug Fixes
+
+* pin ca-certificates version for hadolint DL3018 ([#5](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/5)) ([ed4e10f](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/ed4e10f4321be512ee806f781f2a7e0e73b16b67))
+* skip nodes without Vultr provider ID in lifecycle checks ([#2](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/2)) ([50d4028](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/50d40283076096cf5f5611bb2a304f29c076ed07))
+* update Alpine to 3.21.3 and unpin ca-certificates ([#3](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/3)) ([dc96ab0](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/dc96ab0f877b3efff1ce056a29e7cc08501ae036))
+
 ## [0.10.4](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.3...v0.10.4) (2024-01-15)
 
 
