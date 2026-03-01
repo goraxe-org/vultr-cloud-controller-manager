@@ -1,3 +1,4 @@
+# renovate: datasource=docker depName=golang
 FROM golang:1.20-alpine AS build
 
 WORKDIR /workspace
@@ -7,8 +8,9 @@ ARG VERSION
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o vultr-cloud-controller-manager .
 
-FROM alpine:3.19.0
-RUN apk add --no-cache ca-certificates=20230506-r0
+# renovate: datasource=docker depName=alpine
+FROM alpine:3.21.3
+RUN apk add --no-cache ca-certificates
 
 COPY --from=build /workspace/vultr-cloud-controller-manager /vultr-cloud-controller-manager
 ENTRYPOINT ["/vultr-cloud-controller-manager"]
