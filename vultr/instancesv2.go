@@ -32,6 +32,13 @@ func newInstancesV2(client *govultr.Client) cloudprovider.InstancesV2 {
 
 // InstanceExists return bool whether or not the instance exists
 func (i *instancesv2) InstanceExists(ctx context.Context, node *v1.Node) (bool, error) {
+	// Nodes without a Vultr provider ID are not managed by this CCM.
+	// Treat them as existing to prevent the node lifecycle controller
+	// from deleting them when they become NotReady.
+	if node.Spec.ProviderID == "" {
+		return true, nil
+	}
+
 	newNode, err := i.getVultrInstance(ctx, node)
 	if err != nil {
 		log.Printf("instance(%s) exists check failed: %e", node.Spec.ProviderID, err) //nolint
@@ -53,6 +60,10 @@ func (i *instancesv2) InstanceExists(ctx context.Context, node *v1.Node) (bool, 
 
 // InstanceShutdown returns bool whether or not the instance is running or powered off
 func (i *instancesv2) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, error) {
+	if node.Spec.ProviderID == "" {
+		return false, nil
+	}
+
 	newNode, err := i.getVultrInstance(ctx, node)
 	if err != nil {
 		log.Printf("instance(%s) shutdown check failed: %e", node.Spec.ProviderID, err) //nolint
@@ -67,6 +78,10 @@ func (i *instancesv2) InstanceShutdown(ctx context.Context, node *v1.Node) (bool
 
 // InstanceMetadata returns a struct of type InstanceMetadata containing the node information
 func (i *instancesv2) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloudprovider.InstanceMetadata, error) {
+	if node.Spec.ProviderID == "" {
+		return nil, fmt.Errorf("node %s has no provider ID, not managed by Vultr", node.Name)
+	}
+
 	newNode, err := i.getVultrInstance(ctx, node)
 	if err != nil {
 		log.Printf("instance(%s) metadata check failed: %e", node.Spec.ProviderID, err) //nolint
