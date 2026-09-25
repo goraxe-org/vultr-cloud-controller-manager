@@ -284,7 +284,7 @@ func (l *loadbalancers) updateLoadBalancerWithLB(ctx context.Context, _ string, 
 		}
 	}
 
-	lbReq, err := l.buildLoadBalancerRequest(ctx, service, nodes)
+	lbReq, err := l.buildLoadBalancerRequest(ctx, service, nodes, lb.Nodes)
 	if err != nil {
 		return fmt.Errorf("failed to create load balancer request: %s", err)
 	}
@@ -483,7 +483,7 @@ func sameService(a, b *v1.Service) bool {
 
 func (l *loadbalancers) createNewLoadBalancer(ctx context.Context, clusterName string, service *v1.Service, nodes []*v1.Node) (*v1.LoadBalancerStatus, error) {
 	klog.Infof("Load balancer for cluster %q doesn't exist, creating", clusterName)
-	lbReq, err := l.buildLoadBalancerRequest(ctx, service, nodes)
+	lbReq, err := l.buildLoadBalancerRequest(ctx, service, nodes, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -724,7 +724,11 @@ func (l *loadbalancers) findLoadBalancerByName(ctx context.Context, service *v1.
 	lbName := l.GetLoadBalancerName(ctx, "", service)
 	return l.lbByName(ctx, lbName)
 }
-func (l *loadbalancers) buildLoadBalancerRequest(ctx context.Context, service *v1.Service, nodes []*v1.Node) (*govultr.LoadBalancerReq, error) {
+
+// buildLoadBalancerRequest builds the create/update request. nodeCount is the
+// LB node count to send when the node-count annotation is not set: 1 on create,
+// the current lb.Nodes on update (so an update never shrinks an existing LB).
+func (l *loadbalancers) buildLoadBalancerRequest(ctx context.Context, service *v1.Service, nodes []*v1.Node, nodeCount int) (*govultr.LoadBalancerReq, error) {
 	stickySession, err := buildStickySession(service)
 	if err != nil {
 		return nil, err
@@ -781,17 +785,19 @@ func (l *loadbalancers) buildLoadBalancerRequest(ctx context.Context, service *v
 		return nil, err
 	}
 
-	nodeC := 1
+	klog.V(logLevelDebug).Infof("node count is currently %d", nodeCount)
 
 	if count, ok := service.Annotations[annoVultrNodeCount]; ok {
-		nodeC, err = strconv.Atoi(count)
+		nodeCount, err = strconv.Atoi(count)
 		if err != nil {
 			return nil, err
 		}
 
-		if nodeC&1 == 0 {
+		if nodeCount&1 == 0 {
 			return nil, fmt.Errorf("%s must be odd", annoVultrNodeCount)
 		}
+
+		klog.V(logLevelDebug).Infof("setting node count to %d", nodeCount)
 	}
 
 	name := l.GetLoadBalancerName(context.Background(), "", service)
@@ -812,7 +818,7 @@ func (l *loadbalancers) buildLoadBalancerRequest(ctx context.Context, service *v
 		FirewallRules:      firewallRules,                                    // need to check
 		Timeout:            timeout,                                          // need to check
 		VPC:                govultr.StringToStringPtr(vpc),                   // need to check
-		Nodes:              nodeC,                                            // need to check
+		Nodes:              nodeCount,                                        // need to check
 	}, nil
 }
 

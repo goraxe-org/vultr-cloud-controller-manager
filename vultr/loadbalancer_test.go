@@ -252,7 +252,7 @@ func TestLoadbalancers_BuildLoadBalancerRequest_FirewallRulesConfigMap(t *testin
 		},
 	}
 
-	req, err := lb.buildLoadBalancerRequest(context.Background(), svc, nodes)
+	req, err := lb.buildLoadBalancerRequest(context.Background(), svc, nodes, 1)
 	if err != nil {
 		t.Fatalf("expected nil got %s", err.Error())
 	}
@@ -600,5 +600,36 @@ func TestLoadbalancers_UpdateLoadBalancer_MixedNodesOnlyAttachesVultrNodes(t *te
 	}
 	if !reflect.DeepEqual(fakeLoadBalancer.updatedReq.Instances, []string{"123"}) {
 		t.Fatalf("expected only the Vultr node to be attached, got %v", fakeLoadBalancer.updatedReq.Instances)
+	}
+}
+
+func TestLoadbalancers_BuildLoadBalancerRequest_NodeCount(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+		current     int
+		expected    int
+	}{
+		{name: "create defaults to 1", current: 1, expected: 1},
+		{name: "update keeps current node count", current: 3, expected: 3},
+		{name: "annotation overrides current node count", annotations: map[string]string{annoVultrNodeCount: "5"}, current: 3, expected: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lb := &loadbalancers{client: &govultr.Client{LoadBalancer: &fakeLB{}}, zone: "ewr"}
+			svc := &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "lb-name", Namespace: v1.NamespaceDefault, UID: "lb-name", Annotations: tc.annotations},
+				Spec: v1.ServiceSpec{
+					Ports: []v1.ServicePort{{Name: "test", Protocol: "TCP", Port: 80, NodePort: 30080}},
+				},
+			}
+
+			req, err := lb.buildLoadBalancerRequest(context.Background(), svc, []*v1.Node{vultrNode("n", "vultr://123")}, tc.current)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.Nodes != tc.expected {
+				t.Fatalf("expected node count %d got %d", tc.expected, req.Nodes)
+			}
+		})
 	}
 }
