@@ -1,3 +1,13 @@
+## [0.10.6](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.5...v0.10.6) (2026-09-25)
+
+
+### Bug Fixes
+
+* **ci:** unblock the releaser pipeline ([772479a](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/772479aeda9733c411fe8acebe652c571b9e07a0))
+* **instancesv2:** treat nodes without a provider ID as unmanaged ([a043a9b](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/a043a9b1e915d06eab7b572169e4ca9951f1638d)), closes [#2](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/2)
+* **loadbalancers:** keep the current LB node count on update ([3401b24](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/3401b24c34baec343242fcac32390a72b22c1b3e)), closes [#1](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/1)
+* **loadbalancers:** skip nodes without a Vultr provider ID ([dcc7825](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/dcc78252b82af4e0692867d80c4315b7e2e0802c))
+
 ## [0.10.5](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.4...v0.10.5) (2026-03-01)
 
 
