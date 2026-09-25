@@ -69,14 +69,14 @@
 
 ## [v0.16.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.15.0...v0.16.0) (2025-11-07)
 ### Bug Fixes
-* Resolve Vultr Load Balancer status update failures during activation 
+* Resolve Vultr Load Balancer status update failures during activation
 
 ## [v0.15.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.14.0...v0.15.0) (2025-10-10)
 ### Dependencies
 * Bump github.com/spf13/pflag from 1.0.6 to 1.0.10 [PR 328](https://github.com/vultr/vultr-cloud-controller-manager/pull/328)
-* Bump github.com/vultr/govultr/v3 from 3.15.0 to 3.24.0 [PR 327](https://github.com/vultr/vultr-cloud-controller-manager/pull/327) 
-* Bump golang.org/x/oauth2 from 0.27.0 to 0.32.0 [PR 327](https://github.com/vultr/vultr-cloud-controller-manager/pull/325) 
-* Bump k8s.io/cloud-provider from 0.31.1 to 0.34.1 [PR 322](https://github.com/vultr/vultr-cloud-controller-manager/pull/322) 
+* Bump github.com/vultr/govultr/v3 from 3.15.0 to 3.24.0 [PR 327](https://github.com/vultr/vultr-cloud-controller-manager/pull/327)
+* Bump golang.org/x/oauth2 from 0.27.0 to 0.32.0 [PR 327](https://github.com/vultr/vultr-cloud-controller-manager/pull/325)
+* Bump k8s.io/cloud-provider from 0.31.1 to 0.34.1 [PR 322](https://github.com/vultr/vultr-cloud-controller-manager/pull/322)
 
 ### Enhancements
 * Add Auto SSL annotation support [PR 296](https://github.com/vultr/vultr-cloud-controller-manager/pull/296)
@@ -100,7 +100,7 @@
 ### Dependencies
 * Update go to v1.24 and github workflows [PR 288](https://github.com/vultr/vultr-cloud-controller-manager/pull/280)
 
-* Update govultr to v3.15.0 [PR 290](https://github.com/vultr/vultr-cloud-controller-manager/pull/290) 
+* Update govultr to v3.15.0 [PR 290](https://github.com/vultr/vultr-cloud-controller-manager/pull/290)
 
 ### Enhancements
 * Add HTTP2/3 and Timeout annonation support  [PR 230](https://github.com/vultr/vultr-cloud-controller-manager/pull/291)

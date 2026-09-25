@@ -20,7 +20,7 @@ When a load-balancer is created through the CCM (Loadbalancer service type), you
 
 Any changes to the load-balancer should be done through the service object.
 
-## Development 
+## Development
 
 Go minimum version `1.19.0`
 
@@ -42,12 +42,12 @@ This will build the binary and output it to a `dist` folder.
 
 ### Building the Docker Image
 
-To build a docker image of the `vultr-cloud-controller-manager` you can use the `docker-build` entry in the make file. Take note that it requires 2 variables 
+To build a docker image of the `vultr-cloud-controller-manager` you can use the `docker-build` entry in the make file. Take note that it requires 2 variables
 
-- Version 
+- Version
 - REGISTRY (dockerhub registry name)
 
-an example could be 
+an example could be
 
 `VERSION=v0.1.0 REGISTRY=vultr make docker-build`
 
@@ -70,5 +70,3 @@ To deploy the versioned CCM that Vultr providers you will need to apply two yaml
 - Secret.yml will take in the region ID in which your cluster is deployed in and your API key.
 
 - v0.X.X.yml is a preconfigured set of kubernetes resources which will help get the CCM installed.
-
-

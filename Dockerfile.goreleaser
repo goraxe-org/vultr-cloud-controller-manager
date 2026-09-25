@@ -1,5 +1,6 @@
 FROM alpine:3.12
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates=20230506-r0
+WORKDIR /app
 COPY vultr-cloud-controller-manager .
-ENTRYPOINT ["./vultr-cloud-controller-manager"]
+ENTRYPOINT ["/app/vultr-cloud-controller-manager"]
