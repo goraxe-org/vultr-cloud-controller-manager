@@ -1,3 +1,42 @@
+## [0.10.5](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.4...v0.10.5) (2026-03-01)
+
+
+### Bug Fixes
+
+* pin ca-certificates version for hadolint DL3018 ([#5](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/5)) ([ed4e10f](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/ed4e10f4321be512ee806f781f2a7e0e73b16b67))
+* skip nodes without Vultr provider ID in lifecycle checks ([#2](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/2)) ([50d4028](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/50d40283076096cf5f5611bb2a304f29c076ed07))
+* update Alpine to 3.21.3 and unpin ca-certificates ([#3](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/3)) ([dc96ab0](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/dc96ab0f877b3efff1ce056a29e7cc08501ae036))
+
+## [0.10.4](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.3...v0.10.4) (2024-01-15)
+
+
+### Bug Fixes
+
+* **loadbalancers:** ignore node if there is no provider ID ([67a88f0](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/67a88f0d44becbd97c6a3ee122015f0bc41ba227))
+
+## [0.10.3](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.2...v0.10.3) (2023-12-19)
+
+
+### Bug Fixes
+
+* entrypoint for controller (again) ([700cacd](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/700cacd7d036e8fb3682426a2d3b11e4a0fac56b))
+
+## [0.10.2](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.1...v0.10.2) (2023-12-19)
+
+
+### Bug Fixes
+
+* entrypoint for controller ([4ae70ee](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/4ae70ee01c87cc7992529034b8909613674ebe9b))
+
+## [0.10.1](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.0...v0.10.1) (2023-12-19)
+
+
+### Bug Fixes
+
+* ensure use of logging constant ([d3aa960](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/d3aa960ea115cbab54b624f69ca2e8835759ee26))
+* update dockerfile ([eafda92](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/eafda92828da901c8232534ae8f9ffdb31a13505))
+* update dockerfile ([4a5558a](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/4a5558acd340d110ae12053aa83156e3aa045d6a))
+
 # Change Log
 ## [v0.18.3](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.18.2...v0.18.3) (2026-09-16)
 ### Bug Fixes
