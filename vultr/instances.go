@@ -26,7 +26,7 @@ func newInstances(client *govultr.Client) cloudprovider.Instances {
 
 // NodeAddresses return all IPv4 addresses associated to a instance by nodeName.
 func (i *instances) NodeAddresses(ctx context.Context, name types.NodeName) ([]v1.NodeAddress, error) {
-	instance, err := vultrByName(ctx, i.client, name)
+	instance, err := vultrByInstanceName(ctx, i.client, name)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (i *instances) NodeAddressesByProviderID(ctx context.Context, providerID st
 		return nil, err
 	}
 
-	instance, err := vultrByID(ctx, i.client, id)
+	instance, err := vultrByInstanceID(ctx, i.client, id)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (i *instances) NodeAddressesByProviderID(ctx context.Context, providerID st
 
 // InstanceID returns the instance ID of the droplet identified by nodeName.
 func (i *instances) InstanceID(ctx context.Context, nodeName types.NodeName) (string, error) {
-	instance, err := vultrByName(ctx, i.client, nodeName)
+	instance, err := vultrByInstanceName(ctx, i.client, nodeName)
 	if err != nil {
 		return "", err
 	}
@@ -71,7 +71,7 @@ func (i *instances) InstanceID(ctx context.Context, nodeName types.NodeName) (st
 
 // InstanceType returns the type of instance for given name.
 func (i *instances) InstanceType(ctx context.Context, name types.NodeName) (string, error) {
-	instance, err := vultrByName(ctx, i.client, name)
+	instance, err := vultrByInstanceName(ctx, i.client, name)
 	if err != nil {
 		return "", err
 	}
@@ -86,7 +86,7 @@ func (i *instances) InstanceTypeByProviderID(ctx context.Context, providerID str
 		return "", err
 	}
 
-	instance, err := vultrByID(ctx, i.client, id)
+	instance, err := vultrByInstanceID(ctx, i.client, id)
 	if err != nil {
 		return "", err
 	}
@@ -111,7 +111,7 @@ func (i *instances) InstanceExistsByProviderID(ctx context.Context, providerID s
 		return false, err
 	}
 
-	_, err = vultrByID(ctx, i.client, id)
+	_, err = vultrByInstanceID(ctx, i.client, id)
 	if err == nil {
 		return true, nil
 	}
@@ -126,7 +126,7 @@ func (i *instances) InstanceShutdownByProviderID(ctx context.Context, providerID
 		return false, err
 	}
 
-	instance, err := vultrByID(ctx, i.client, id)
+	instance, err := vultrByInstanceID(ctx, i.client, id)
 	if err != nil {
 		return false, err
 	}
@@ -143,15 +143,30 @@ func (i *instances) nodeAddresses(instance *govultr.Instance) ([]v1.NodeAddress,
 		Address: instance.Label,
 	})
 
-	// make sure we have either pubic and private ip
-	if instance.InternalIP == "" || instance.MainIP == "" {
-		return nil, fmt.Errorf("require both public and private IP")
+	// Check conditions for internal and main IP
+	if instance.InternalIP == "" && instance.MainIP == "" {
+		return nil, fmt.Errorf("require at least one of internal or public IP")
 	}
 
-	addresses = append(addresses,
-		v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.InternalIP}, // private IP
-		v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.MainIP},     // public IP
-	)
+	// Handle the case where both IPs are provided
+	if instance.InternalIP != "" && instance.MainIP != "" {
+		addresses = append(addresses,
+			v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.InternalIP}, // private IP
+			v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.MainIP},     // public IP
+		)
+	} else if instance.InternalIP == "" && instance.MainIP != "" {
+		// If internal IP is empty but main IP is not, use main IP for both
+		addresses = append(addresses,
+			v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.MainIP}, // treat main IP as internal IP
+			v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.MainIP}, // public IP
+		)
+	} else if instance.InternalIP != "" && instance.MainIP == "" {
+		// If main IP is empty but internal IP is not, use internal IP for both
+		addresses = append(addresses,
+			v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.InternalIP}, // private IP
+			v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.InternalIP}, // treat internal IP as external IP
+		)
+	}
 
 	if instance.V6MainIP != "" {
 		addresses = append(addresses, v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.V6MainIP}) // IPv6
@@ -168,17 +183,17 @@ func vultrIDFromProviderID(providerID string) (string, error) {
 
 	split := strings.Split(providerID, "://")
 	if len(split) != 2 { //nolint
-		return "", fmt.Errorf("unexpected providerID format %s, expected format to be: vultr://abc123", providerID)
+		return "", fmt.Errorf("unexpected providerID format %q, expected format to be: vultr://abc123", providerID)
 	}
 
 	if split[0] != ProviderName {
-		return "", fmt.Errorf("provider scheme from providerID should be 'vultr://', %s", providerID)
+		return "", fmt.Errorf("provider scheme from providerID %q should be 'vultr://'", providerID)
 	}
 	return split[1], nil
 }
 
 // vultrByID returns a vultr instance for the given id.
-func vultrByID(ctx context.Context, client *govultr.Client, id string) (*govultr.Instance, error) {
+func vultrByInstanceID(ctx context.Context, client *govultr.Client, id string) (*govultr.Instance, error) {
 	instance, _, err := client.Instance.Get(ctx, id) //nolint:bodyclose
 	if err != nil {
 		return nil, err
@@ -188,7 +203,7 @@ func vultrByID(ctx context.Context, client *govultr.Client, id string) (*govultr
 
 // vultrByName returns a vultr instance for a given NodeName.
 // Note that if multiple nodes with the same name exist and error will be thrown.
-func vultrByName(ctx context.Context, client *govultr.Client, nodeName types.NodeName) (*govultr.Instance, error) {
+func vultrByInstanceName(ctx context.Context, client *govultr.Client, nodeName types.NodeName) (*govultr.Instance, error) {
 	listOptions := &govultr.ListOptions{PerPage: 300}
 
 	var instances []govultr.Instance

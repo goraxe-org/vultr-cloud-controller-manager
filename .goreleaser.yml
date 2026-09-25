@@ -1,3 +1,4 @@
+version: 2
 before:
   hooks:
     - go mod download
@@ -23,7 +24,7 @@ builds:
 
 archives:
   -
-    format: zip
+    formats: zip
     files:
       - none*
     name_template: '{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}'
@@ -43,6 +44,3 @@ dockers:
 
 release:
   draft: false
-
-changelog:
-  skip: false

@@ -5,8 +5,11 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/vultr/govultr/v3"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestLoadbalancers_GetLoadBalancer(t *testing.T) {
@@ -16,10 +19,12 @@ func TestLoadbalancers_GetLoadBalancer(t *testing.T) {
 
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "lb-name",
-			Namespace:   v1.NamespaceDefault,
-			UID:         "lb-name",
-			Annotations: nil,
+			Name:      "lb-name",
+			Namespace: v1.NamespaceDefault,
+			UID:       "lb-name",
+			Annotations: map[string]string{
+				annoVultrLoadBalancerID: "abc123",
+			},
 		},
 		Spec: v1.ServiceSpec{
 			Ports: []v1.ServicePort{
@@ -62,10 +67,12 @@ func TestLoadbalancers_GetLoadBalancerName(t *testing.T) {
 
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "lb-name",
-			Namespace:   v1.NamespaceDefault,
-			UID:         "lb-name",
-			Annotations: nil,
+			Name:      "lb-name",
+			Namespace: v1.NamespaceDefault,
+			UID:       "lb-name",
+			Annotations: map[string]string{
+				annoVultrLoadBalancerID: "abc123",
+			},
 		},
 		Spec: v1.ServiceSpec{
 			Ports: []v1.ServicePort{
@@ -90,14 +97,17 @@ func TestLoadbalancers_EnsureLoadBalancer(t *testing.T) {
 	client := newFakeClient()
 	lb := newLoadbalancers(client, "1")
 
+	lb.(*loadbalancers).kubeClient = &fake.Clientset{}
+
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lb-name",
 			Namespace: v1.NamespaceDefault,
 			UID:       "lb-name",
 			Annotations: map[string]string{
-				annoVultrFirewallRules: "cloudflare,80;10.0.0.0/8,80",
-				annoVultrNodeCount:     "5",
+				annoVultrFirewallRules:  "cloudflare,80;10.0.0.0/8,80",
+				annoVultrNodeCount:      "5",
+				annoVultrLoadBalancerID: "abc123",
 			},
 		},
 		Spec: v1.ServiceSpec{
@@ -155,10 +165,12 @@ func TestLoadbalancers_UpdateLoadBalancer(t *testing.T) {
 
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "lb-name",
-			Namespace:   v1.NamespaceDefault,
-			UID:         "lb-name",
-			Annotations: nil,
+			Name:      "lb-name",
+			Namespace: v1.NamespaceDefault,
+			UID:       "lb-name",
+			Annotations: map[string]string{
+				annoVultrLoadBalancerID: "abc123",
+			},
 		},
 		Spec: v1.ServiceSpec{
 			Ports: []v1.ServicePort{
@@ -197,6 +209,63 @@ func TestLoadbalancers_UpdateLoadBalancer(t *testing.T) {
 	}
 }
 
+func TestLoadbalancers_BuildLoadBalancerRequest_FirewallRulesConfigMap(t *testing.T) {
+	lb := &loadbalancers{
+		client: &govultr.Client{LoadBalancer: &fakeLB{}},
+		zone:   "ewr",
+		kubeClient: fake.NewClientset(&v1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "lb-firewall-rules",
+				Namespace: v1.NamespaceDefault,
+			},
+			Data: map[string]string{
+				firewallRulesCMKey: "v4:\n- source: 192.168.1.1/16\n  port: 80\nv6:\n- source: cloudflare\n  port: 443\n",
+			},
+		}),
+	}
+
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lb-name",
+			Namespace: v1.NamespaceDefault,
+			UID:       "lb-name",
+			Annotations: map[string]string{
+				annoVultrFirewallRules:   "10.0.0.0/8,80",
+				annoVultrFirewallRulesCM: "lb-firewall-rules",
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{
+				{
+					Name:     "test",
+					Protocol: "TCP",
+					Port:     int32(443),
+					NodePort: int32(30443),
+				},
+			},
+		},
+	}
+	nodes := []*v1.Node{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node1"},
+			Spec:       v1.NodeSpec{ProviderID: "vultr://123"},
+		},
+	}
+
+	req, err := lb.buildLoadBalancerRequest(context.Background(), svc, nodes, 1)
+	if err != nil {
+		t.Fatalf("expected nil got %s", err.Error())
+	}
+
+	expected := []govultr.LBFirewallRule{
+		{Source: "192.168.1.1/16", IPType: "v4", Port: 80},
+		{Source: "cloudflare", IPType: "v6", Port: 443},
+	}
+	if !reflect.DeepEqual(req.FirewallRules, expected) {
+		t.Fatalf("expected %+v got %+v", expected, req.FirewallRules)
+	}
+}
+
 func TestLoadbalancers_EnsureLoadBalancerDeleted(t *testing.T) {
 	client := newFakeClient()
 	lb := newLoadbalancers(client, "1")
@@ -223,5 +292,344 @@ func TestLoadbalancers_EnsureLoadBalancerDeleted(t *testing.T) {
 	err := lb.EnsureLoadBalancerDeleted(context.Background(), "cluster-name", svc)
 	if err != nil {
 		t.Errorf("expected nil got %s", err.Error())
+	}
+}
+
+func TestLoadbalancers_UpdateLoadBalancer_SharedLabelMergesForwardingRules(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		annotations      map[string]string
+		frontendProtocol string
+		backendProtocol  string
+		existingRuleID   string
+		existingFrontend int
+		existingBackend  int
+		desiredFrontend  int32
+		desiredBackend   int32
+	}{
+		{
+			name:             "tcp",
+			annotations:      map[string]string{annoVultrLBProtocol: protocolTCP},
+			frontendProtocol: protocolTCP,
+			backendProtocol:  protocolTCP,
+			existingRuleID:   "rule-50001",
+			existingFrontend: 50001,
+			existingBackend:  30001,
+			desiredFrontend:  50002,
+			desiredBackend:   30002,
+		},
+		{
+			name:             "udp",
+			annotations:      map[string]string{annoVultrLBProtocol: protocolUDP},
+			frontendProtocol: protocolUDP,
+			backendProtocol:  protocolUDP,
+			existingRuleID:   "rule-50001",
+			existingFrontend: 50001,
+			existingBackend:  30001,
+			desiredFrontend:  50002,
+			desiredBackend:   30002,
+		},
+		{
+			name:             "http",
+			annotations:      map[string]string{annoVultrLBProtocol: protocolHTTP},
+			frontendProtocol: protocolHTTP,
+			backendProtocol:  protocolHTTP,
+			existingRuleID:   "rule-80",
+			existingFrontend: 80,
+			existingBackend:  30080,
+			desiredFrontend:  8080,
+			desiredBackend:   30081,
+		},
+		{
+			name: protocolHTTPS,
+			annotations: map[string]string{
+				annoVultrLBProtocol:   protocolHTTP,
+				annoVultrLBHTTPSPorts: "8443",
+			},
+			frontendProtocol: protocolHTTPS,
+			backendProtocol:  protocolHTTPS,
+			existingRuleID:   "rule-443",
+			existingFrontend: 443,
+			existingBackend:  30443,
+			desiredFrontend:  8443,
+			desiredBackend:   30444,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testSharedLabelMergeForwardingRules(t, tc.annotations, govultr.ForwardingRule{
+				RuleID:           tc.existingRuleID,
+				FrontendProtocol: tc.frontendProtocol,
+				FrontendPort:     tc.existingFrontend,
+				BackendProtocol:  tc.backendProtocol,
+				BackendPort:      tc.existingBackend,
+			}, govultr.ForwardingRule{
+				FrontendProtocol: tc.frontendProtocol,
+				FrontendPort:     int(tc.desiredFrontend),
+				BackendProtocol:  tc.backendProtocol,
+				BackendPort:      int(tc.desiredBackend),
+			}, tc.desiredFrontend, tc.desiredBackend)
+		})
+	}
+}
+
+func testSharedLabelMergeForwardingRules(t *testing.T, annotations map[string]string, existingRule, expectedRule govultr.ForwardingRule, port, nodePort int32) {
+	t.Helper()
+
+	fakeLoadBalancer := &fakeLB{
+		forwardingRules: []govultr.ForwardingRule{existingRule},
+	}
+	lb := &loadbalancers{
+		client: &govultr.Client{LoadBalancer: fakeLoadBalancer},
+		zone:   "ewr",
+	}
+	svcAnnotations := map[string]string{
+		annoVultrLoadBalancerID:    "6334f227-6d96-4cbd-9bcb-5be0759354fa",
+		annoVultrLoadBalancerLabel: "shared-load-balancer",
+	}
+	for key, value := range annotations {
+		svcAnnotations[key] = value
+	}
+
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "shared-service-b",
+			Namespace:   v1.NamespaceDefault,
+			UID:         "shared-service-b",
+			Annotations: svcAnnotations,
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{
+				{
+					Name:     "service-port",
+					Port:     port,
+					NodePort: nodePort,
+				},
+			},
+		},
+	}
+
+	// buildInstanceList errors when no Vultr nodes are passed, so attach one.
+	nodes := []*v1.Node{vultrNode("node1", "vultr://123")}
+	err := lb.UpdateLoadBalancer(context.Background(), "cluster-name", svc, nodes)
+	if err != nil {
+		t.Fatalf("expected nil got %s", err.Error())
+	}
+
+	if fakeLoadBalancer.updatedReq == nil {
+		t.Fatal("expected load balancer update request")
+	}
+	if fakeLoadBalancer.updatedReq.ForwardingRules != nil {
+		t.Fatalf("expected shared load balancer update to omit forwarding rules, got %+v", fakeLoadBalancer.updatedReq.ForwardingRules)
+	}
+	if len(fakeLoadBalancer.deletedRules) != 0 {
+		t.Fatalf("expected no forwarding rule deletions, got %+v", fakeLoadBalancer.deletedRules)
+	}
+	if len(fakeLoadBalancer.createdRules) != 1 {
+		t.Fatalf("expected one created forwarding rule, got %+v", fakeLoadBalancer.createdRules)
+	}
+
+	createdRule := fakeLoadBalancer.createdRules[0]
+	if !forwardingRulesEqual(createdRule, expectedRule) {
+		t.Fatalf("unexpected created forwarding rule: %+v", createdRule)
+	}
+}
+
+func TestLoadbalancers_EnsureLoadBalancerDeleted_SharedLabelRemovesOnlyServiceRules(t *testing.T) {
+	fakeLoadBalancer := &fakeLB{
+		forwardingRules: []govultr.ForwardingRule{
+			{
+				RuleID:           "rule-50001",
+				FrontendProtocol: protocolUDP,
+				FrontendPort:     50001,
+				BackendProtocol:  protocolUDP,
+				BackendPort:      30001,
+			},
+			{
+				RuleID:           "rule-50002",
+				FrontendProtocol: protocolUDP,
+				FrontendPort:     50002,
+				BackendProtocol:  protocolUDP,
+				BackendPort:      30002,
+			},
+		},
+	}
+	lb := &loadbalancers{
+		client:     &govultr.Client{LoadBalancer: fakeLoadBalancer},
+		zone:       "ewr",
+		kubeClient: fake.NewClientset(sharedLabelService("shared-service-b", "shared-service-b", 50002, 30002)),
+	}
+
+	deletingService := sharedLabelService("shared-service-a", "shared-service-a", 50001, 30001)
+	err := lb.EnsureLoadBalancerDeleted(context.Background(), "cluster-name", deletingService)
+	if err != nil {
+		t.Fatalf("expected nil got %s", err.Error())
+	}
+
+	if fakeLoadBalancer.deletedLB {
+		t.Fatal("expected shared load balancer to remain while another service references its label")
+	}
+	if !reflect.DeepEqual(fakeLoadBalancer.deletedRules, []string{"rule-50001"}) {
+		t.Fatalf("expected only deleting service rule to be removed, got %+v", fakeLoadBalancer.deletedRules)
+	}
+}
+
+func TestLoadbalancers_EnsureLoadBalancerDeleted_SharedLabelDeletesLBWhenLastReference(t *testing.T) {
+	fakeLoadBalancer := &fakeLB{}
+	lb := &loadbalancers{
+		client:     &govultr.Client{LoadBalancer: fakeLoadBalancer},
+		zone:       "ewr",
+		kubeClient: fake.NewClientset(),
+	}
+
+	deletingService := sharedLabelService("shared-service-a", "shared-service-a", 50001, 30001)
+	err := lb.EnsureLoadBalancerDeleted(context.Background(), "cluster-name", deletingService)
+	if err != nil {
+		t.Fatalf("expected nil got %s", err.Error())
+	}
+
+	if !fakeLoadBalancer.deletedLB {
+		t.Fatal("expected shared load balancer to be deleted after last service reference is removed")
+	}
+	if len(fakeLoadBalancer.deletedRules) != 0 {
+		t.Fatalf("expected no forwarding rule deletions when deleting the load balancer, got %+v", fakeLoadBalancer.deletedRules)
+	}
+}
+
+func sharedLabelService(name, uid string, port, nodePort int32) *v1.Service {
+	return &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: v1.NamespaceDefault,
+			UID:       typesUID(uid),
+			Annotations: map[string]string{
+				annoVultrLoadBalancerID:    "6334f227-6d96-4cbd-9bcb-5be0759354fa",
+				annoVultrLoadBalancerLabel: "shared-load-balancer",
+				annoVultrLBProtocol:        protocolUDP,
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{
+				{
+					Name:     "service-port",
+					Protocol: v1.ProtocolUDP,
+					Port:     port,
+					NodePort: nodePort,
+				},
+			},
+		},
+	}
+}
+
+func typesUID(uid string) types.UID {
+	return types.UID(uid)
+}
+
+func vultrNode(name, providerID string) *v1.Node {
+	return &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       v1.NodeSpec{ProviderID: providerID},
+	}
+}
+
+func TestBuildInstanceList_SkipsNodesWithoutProviderID(t *testing.T) {
+	nodes := []*v1.Node{
+		vultrNode("master-1", ""),
+		vultrNode("k8s-node-7", "vultr://75b95d83-47e2-4c0f-b273-cc9ce2b456f8"),
+		vultrNode("home-node-1", ""),
+		vultrNode("k8s-node-12", "vultr://0a1b2c3d-0000-4c0f-b273-cc9ce2b456f8"),
+		vultrNode("home-node-2", ""),
+	}
+
+	actual, err := buildInstanceList(nodes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []string{"75b95d83-47e2-4c0f-b273-cc9ce2b456f8", "0a1b2c3d-0000-4c0f-b273-cc9ce2b456f8"}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("expected %v got %v", expected, actual)
+	}
+}
+
+func TestBuildInstanceList_ErrorsWhenNoVultrNodes(t *testing.T) {
+	for name, nodes := range map[string][]*v1.Node{
+		"all home nodes": {vultrNode("master-1", ""), vultrNode("home-node-1", "")},
+		"no nodes":       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			actual, err := buildInstanceList(nodes)
+			if err == nil {
+				t.Fatalf("expected an error, got list %v", actual)
+			}
+			if len(actual) != 0 {
+				t.Fatalf("expected empty list, got %v", actual)
+			}
+		})
+	}
+}
+
+func TestLoadbalancers_UpdateLoadBalancer_MixedNodesOnlyAttachesVultrNodes(t *testing.T) {
+	fakeLoadBalancer := &fakeLB{}
+	lb := &loadbalancers{
+		client: &govultr.Client{LoadBalancer: fakeLoadBalancer},
+		zone:   "ewr",
+	}
+
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "lb-name",
+			Namespace:   v1.NamespaceDefault,
+			UID:         "lb-name",
+			Annotations: map[string]string{annoVultrLoadBalancerID: "6334f227-6d96-4cbd-9bcb-5be0759354fa"},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{Name: "test", Protocol: "TCP", Port: 80, NodePort: 30080}},
+		},
+	}
+	nodes := []*v1.Node{
+		vultrNode("master-1", ""),
+		vultrNode("k8s-node-7", "vultr://123"),
+		vultrNode("home-node-1", ""),
+	}
+
+	if err := lb.UpdateLoadBalancer(context.Background(), "cluster-name", svc, nodes); err != nil {
+		t.Fatalf("expected nil got %s", err.Error())
+	}
+	if fakeLoadBalancer.updatedReq == nil {
+		t.Fatal("expected load balancer update request")
+	}
+	if !reflect.DeepEqual(fakeLoadBalancer.updatedReq.Instances, []string{"123"}) {
+		t.Fatalf("expected only the Vultr node to be attached, got %v", fakeLoadBalancer.updatedReq.Instances)
+	}
+}
+
+func TestLoadbalancers_BuildLoadBalancerRequest_NodeCount(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+		current     int
+		expected    int
+	}{
+		{name: "create defaults to 1", current: 1, expected: 1},
+		{name: "update keeps current node count", current: 3, expected: 3},
+		{name: "annotation overrides current node count", annotations: map[string]string{annoVultrNodeCount: "5"}, current: 3, expected: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lb := &loadbalancers{client: &govultr.Client{LoadBalancer: &fakeLB{}}, zone: "ewr"}
+			svc := &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "lb-name", Namespace: v1.NamespaceDefault, UID: "lb-name", Annotations: tc.annotations},
+				Spec: v1.ServiceSpec{
+					Ports: []v1.ServicePort{{Name: "test", Protocol: "TCP", Port: 80, NodePort: 30080}},
+				},
+			}
+
+			req, err := lb.buildLoadBalancerRequest(context.Background(), svc, []*v1.Node{vultrNode("n", "vultr://123")}, tc.current)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.Nodes != tc.expected {
+				t.Fatalf("expected node count %d got %d", tc.expected, req.Nodes)
+			}
+		})
 	}
 }

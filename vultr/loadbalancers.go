@@ -3,15 +3,21 @@ package vultr
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/asaskevich/govalidator"
 	"github.com/vultr/govultr/v3"
 	"github.com/vultr/metadata"
+	"go.yaml.in/yaml/v3"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -20,10 +26,14 @@ import (
 )
 
 const (
-	annoVultrLoadBalancerID = "kubernetes.vultr.com/load-balancer-id" //nolint (this is unused)
+	// annoVultrLoadBalancerLabel is used to set custom labels for load balancers
+	annoVultrLoadBalancerLabel = "service.beta.kubernetes.io/vultr-loadbalancer-label"
+
+	// annoVultrLoadBalancerID is used to identify individual Vultr load balancers, this is managed by the CCM
+	annoVultrLoadBalancerID = "service.beta.kubernetes.io/vultr-loadbalancer-id"
 
 	// annoVultrLoadBalancerCreate defaults to true and is to specify whether or not to create a VLB for the svc
-	annoVultrLoadBalancerCreate = "kubernetes.vultr.com/load-balancer-create"
+	annoVultrLoadBalancerCreate = "service.beta.kubernetes.io/vultr-loadbalancer-create"
 
 	// annoVultrLBProtocol is the annotation used to specify
 	// which protocol should be used for a Load Balancer.
@@ -33,7 +43,7 @@ const (
 	// annoVultrLBHTTPSPorts is the annotation used to specify
 	// which ports should be used for HTTPS.
 	// You can pass in a comma separated list: 443,8443
-	annoVultrLbHTTPSPorts = "service.beta.kubernetes.io/vultr-loadbalancer-https-ports"
+	annoVultrLBHTTPSPorts = "service.beta.kubernetes.io/vultr-loadbalancer-https-ports"
 
 	// annoVultrLBSSLPassthrough is the annotation used to specify
 	// whether or not you do not wish to have SSL termination on the load balancer
@@ -44,8 +54,16 @@ const (
 	// which TLS secret you want to be used for your load balancers SSL
 	annoVultrLBSSL = "service.beta.kubernetes.io/vultr-loadbalancer-ssl"
 
+	// annoVultrLBAUTOSSL is the annotation used to specify
+	// which kubernetes secret containing the domain zone and sub domain
+	// you want to be used for your load balancers Auto SSL
+	annoVultrLBAutoSSL = "service.beta.kubernetes.io/vultr-loadbalancer-auto-ssl"
+
 	// annoVultrLBBackendProtocol backend protocol
 	annoVultrLBBackendProtocol = "service.beta.kubernetes.io/vultr-loadbalancer-backend-protocol"
+
+	// annoVultrHostname is the hostname used for VLB to prevent hairpinning
+	annoVultrHostname = "service.beta.kubernetes.io/vultr-loadbalancer-hostname"
 
 	annoVultrHealthCheckPath               = "service.beta.kubernetes.io/vultr-loadbalancer-healthcheck-path"
 	annoVultrHealthCheckProtocol           = "service.beta.kubernetes.io/vultr-loadbalancer-healthcheck-protocol"
@@ -58,13 +76,18 @@ const (
 	annoVultrAlgorithm     = "service.beta.kubernetes.io/vultr-loadbalancer-algorithm"
 	annoVultrSSLRedirect   = "service.beta.kubernetes.io/vultr-loadbalancer-ssl-redirect"
 	annoVultrProxyProtocol = "service.beta.kubernetes.io/vultr-loadbalancer-proxy-protocol"
+	annoVultrLBHTTP2       = "service.beta.kubernetes.io/vultr-loadbalancer-http2"
+	annoVultrLBHTTP3       = "service.beta.kubernetes.io/vultr-loadbalancer-http3"
+	annoVultrLBTimeout     = "service.beta.kubernetes.io/vultr-loadbalancer-timeout"
 
 	annoVultrStickySessionEnabled    = "service.beta.kubernetes.io/vultr-loadbalancer-sticky-session-enabled"
 	annoVultrStickySessionCookieName = "service.beta.kubernetes.io/vultr-loadbalancer-sticky-session-cookie-name"
 
-	annoVultrFirewallRules  = "service.beta.kubernetes.io/vultr-loadbalancer-firewall-rules"
-	annoVultrPrivateNetwork = "service.beta.kubernetes.io/vultr-loadbalancer-private-network"
-	annoVultrVPC            = "service.beta.kubernetes.io/vultr-loadbalancer-vpc"
+	annoVultrFirewallRules   = "service.beta.kubernetes.io/vultr-loadbalancer-firewall-rules"
+	annoVultrFirewallRulesCM = "service.beta.kubernetes.io/vultr-loadbalancer-firewall-rules-cm"
+	firewallRulesCMKey       = "firewallRules"
+	annoVultrPrivateNetwork  = "service.beta.kubernetes.io/vultr-loadbalancer-private-network"
+	annoVultrVPC             = "service.beta.kubernetes.io/vultr-loadbalancer-vpc"
 
 	annoVultrNodeCount = "service.beta.kubernetes.io/vultr-loadbalancer-node-count"
 
@@ -75,22 +98,28 @@ const (
 	protocolHTTP  = "http"
 	protocolHTTPS = "https"
 	protocolTCP   = "tcp"
-
-	portProtocolTCP = "TCP" //nolint
-	portProtocolUDP = "UDP"
+	protocolUDP   = "udp"
 
 	healthCheckInterval  = 15
 	healthCheckResponse  = 5
 	healthCheckUnhealthy = 5
 	healthCheckHealthy   = 5
 
+	defaultLBTimeout = 600
+
+	syncTimeout = 10
+
 	lbStatusActive = "active"
 )
 
-var (
-	errLbNotFound                            = fmt.Errorf("loadbalancer not found")
-	_             cloudprovider.LoadBalancer = &loadbalancers{}
+const (
+	logLevelError = 2
+	logLevelDebug = 3
+	logLevelTrace = 4
 )
+
+var errLbNotFound = fmt.Errorf("loadbalancer not found")
+var _ cloudprovider.LoadBalancer = &loadbalancers{}
 
 type loadbalancers struct {
 	client *govultr.Client
@@ -99,29 +128,52 @@ type loadbalancers struct {
 	kubeClient kubernetes.Interface
 }
 
+// LBIDValidationError represents an error that occurs during load balancer ID validation
+// and indicates whether the annotation should be updated
+type LBIDValidationError struct {
+	Message      string
+	ShouldUpdate bool
+}
+
+func (e *LBIDValidationError) Error() string {
+	return e.Message
+}
+
 func newLoadbalancers(client *govultr.Client, zone string) cloudprovider.LoadBalancer {
 	return &loadbalancers{client: client, zone: zone}
 }
 
-func (l *loadbalancers) GetLoadBalancer(ctx context.Context, clusterName string, service *v1.Service) (status *v1.LoadBalancerStatus, exists bool, err error) {
-	lbName := l.GetLoadBalancerName(ctx, clusterName, service)
-
-	lb, err := l.lbByName(ctx, lbName)
+func (l *loadbalancers) GetLoadBalancer(ctx context.Context, _ string, service *v1.Service) (status *v1.LoadBalancerStatus, exists bool, err error) {
+	lb, err := l.getVultrLB(ctx, service)
 	if err != nil {
 		if err == errLbNotFound {
 			return nil, false, nil
 		}
-
 		return nil, false, err
 	}
 
 	enabledIPv6 := checkEnabledIPv6(service)
 	var ingress []v1.LoadBalancerIngress
 
-	ingress = append(ingress, v1.LoadBalancerIngress{Hostname: lb.Label, IP: lb.IPV4})
+	// Check if hostname annotation is blank and set if not
+	if _, ok := service.Annotations[annoVultrHostname]; ok {
+		if service.Annotations[annoVultrHostname] != "" {
+			var hostname string
+			if govalidator.IsDNSName(service.Annotations[annoVultrHostname]) {
+				hostname = service.Annotations[annoVultrHostname]
+			} else {
+				return nil, true, fmt.Errorf("hostname %s is not a valid DNS name", service.Annotations[annoVultrHostname])
+			}
+			klog.Infof("setting hostname for loadbalancer to: %s", hostname)
+			ingress = append(ingress, v1.LoadBalancerIngress{Hostname: hostname})
+		}
+	} else {
+		hostname := lb.Label
+		ingress = append(ingress, v1.LoadBalancerIngress{Hostname: hostname, IP: lb.IPV4})
 
-	if enabledIPv6 {
-		ingress = append(ingress, v1.LoadBalancerIngress{Hostname: lb.Label, IP: lb.IPV6})
+		if enabledIPv6 {
+			ingress = append(ingress, v1.LoadBalancerIngress{Hostname: hostname, IP: lb.IPV6})
+		}
 	}
 
 	return &v1.LoadBalancerStatus{
@@ -130,6 +182,9 @@ func (l *loadbalancers) GetLoadBalancer(ctx context.Context, clusterName string,
 }
 
 func (l *loadbalancers) GetLoadBalancerName(_ context.Context, _ string, service *v1.Service) string {
+	if label, ok := service.Annotations[annoVultrLoadBalancerLabel]; ok {
+		return label
+	}
 	return getDefaultLBName(service)
 }
 
@@ -138,119 +193,137 @@ func getDefaultLBName(service *v1.Service) string {
 }
 
 func (l *loadbalancers) EnsureLoadBalancer(ctx context.Context, clusterName string, service *v1.Service, nodes []*v1.Node) (*v1.LoadBalancerStatus, error) {
-	_, exists, err := l.GetLoadBalancer(ctx, clusterName, service)
-	if err != nil {
-		return nil, err
-	}
-
+	// Check if creation is disabled
 	if create, ok := service.Annotations[annoVultrLoadBalancerCreate]; ok {
 		if strings.EqualFold(create, "false") {
-			return nil, fmt.Errorf("%s set to %s - load balancer will not be created", annoVultrLoadBalancerCreate, create)
+			return nil, cloudprovider.ImplementedElsewhere
 		}
 	}
 
-	// if exists is false and the err above was nil then this is errLbNotFound
-	if !exists {
-		klog.Infof("Load balancer for cluster %q doesn't exist, creating", clusterName)
-		lbReq, err1 := l.buildLoadBalancerRequest(service, nodes, 1)
-		if err1 != nil {
-			return nil, err1
-		}
-
-		lbReq.Region = l.zone
-		lb2, _, err1 := l.client.LoadBalancer.Create(ctx, lbReq) //nolint:bodyclose
-		if err1 != nil {
-			return nil, fmt.Errorf("failed to create load-balancer: %s", err1)
-		}
-		klog.Infof("Created load balancer %q", lb2.ID)
-
-		if lb2.Status != lbStatusActive {
-			return nil, fmt.Errorf("load-balancer is not yet active - current status: %s", lb2.Status)
-		}
-
-		enabledIPv6 := checkEnabledIPv6(service)
-		var ingress []v1.LoadBalancerIngress
-
-		ingress = append(ingress, v1.LoadBalancerIngress{Hostname: lb2.Label, IP: lb2.IPV4})
-
-		if enabledIPv6 {
-			ingress = append(ingress, v1.LoadBalancerIngress{Hostname: lb2.Label, IP: lb2.IPV6})
-		}
-
-		return &v1.LoadBalancerStatus{
-			Ingress: ingress,
-		}, nil
-	}
-
-	klog.Infof("Load balancer exists for cluster %q", clusterName)
-
-	lbName := l.GetLoadBalancerName(ctx, clusterName, service)
-	lb, err := l.lbByName(ctx, lbName)
+	lb, err := l.getVultrLB(ctx, service)
 	if err != nil {
-		if err == errLbNotFound {
-			return nil, errLbNotFound
+		if id, ok := service.Annotations[annoVultrLoadBalancerID]; ok && err == errLbNotFound {
+			// LoadBalancer has ID but cannot be found
+			return nil, fmt.Errorf("load balancer ID %q for service '%s/%s' not found", id, service.Namespace, service.Name)
 		}
-
+		if err == errLbNotFound {
+			// Load balancer doesn't exist, create new one
+			return l.createNewLoadBalancer(ctx, clusterName, service, nodes)
+		}
 		return nil, err
 	}
 
-	klog.Infof("Found load balancer: %q", lbName)
+	// Load balancer exists
+	klog.Infof("Load balancer exists for cluster %q", clusterName)
+	klog.Infof("Found load balancer: %q", lb.Label)
+
+	// Set and validate the Vultr VLB ID annotation
+	if setErr := l.setAndValidateLBIDAnnotation(ctx, service, lb.ID); setErr != nil {
+		return nil, setErr
+	}
 
 	if lb.Status != lbStatusActive {
 		return nil, fmt.Errorf("load-balancer is not yet active - current status: %s", lb.Status)
 	}
 
-	if err2 := l.UpdateLoadBalancer(ctx, clusterName, service, nodes); err2 != nil {
-		return nil, err2
+	if updateErr := l.updateLoadBalancerWithLB(ctx, clusterName, service, nodes, lb); updateErr != nil {
+		if isLBActivating(updateErr) {
+			ingress := l.buildLoadBalancerIngress(service, lb)
+			if len(ingress) > 0 {
+				klog.V(2).Infof("LB %s update deferred: nodes still activating; returning current ingress and retrying in background", lb.ID)
+				l.retryLBUpdateAsync(ctx, lb.ID, clusterName, service, nodes)
+				return &v1.LoadBalancerStatus{Ingress: ingress}, nil
+			}
+		}
+		return nil, updateErr
 	}
 
-	lbStatus, _, err := l.GetLoadBalancer(ctx, clusterName, service)
-	if err != nil {
-		return nil, err
-	}
-
-	return lbStatus, nil
+	ingress := l.buildLoadBalancerIngress(service, lb)
+	return &v1.LoadBalancerStatus{
+		Ingress: ingress,
+	}, nil
 }
 
 func (l *loadbalancers) UpdateLoadBalancer(ctx context.Context, clusterName string, service *v1.Service, nodes []*v1.Node) error {
-	klog.V(3).Info("Called UpdateLoadBalancers") //nolint
-	if _, _, err := l.GetLoadBalancer(ctx, clusterName, service); err != nil {
-		return err
-	}
+	klog.V(3).Info("Called UpdateLoadBalancers")
 
-	lbName := l.GetLoadBalancerName(ctx, clusterName, service)
-	lb, err := l.lbByName(ctx, lbName)
+	// Single call to get the load balancer
+	lb, err := l.getVultrLB(ctx, service)
 	if err != nil {
 		return err
 	}
 
-	lbReq, err := l.buildLoadBalancerRequest(service, nodes, lb.Nodes)
+	return l.updateLoadBalancerWithLB(ctx, clusterName, service, nodes, lb)
+}
+
+func (l *loadbalancers) updateLoadBalancerWithLB(ctx context.Context, _ string, service *v1.Service, nodes []*v1.Node, lb *govultr.LoadBalancer) error {
+	// Set the Vultr VLB ID annotation if not present
+	if _, ok := service.Annotations[annoVultrLoadBalancerID]; !ok {
+		if err := l.GetKubeClient(); err != nil {
+			return fmt.Errorf("failed to get kubeclient to update service: %s", err)
+		}
+
+		// Use patch to atomically set the annotation
+		patchData := map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"annotations": map[string]string{
+					annoVultrLoadBalancerID: lb.ID,
+				},
+			},
+		}
+
+		patchBytes, err := json.Marshal(patchData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal patch: %w", err)
+		}
+
+		_, err = l.kubeClient.CoreV1().Services(service.Namespace).
+			Patch(ctx, service.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to annotate service with loadbalancer ID %q: %s", lb.ID, err)
+		}
+	}
+
+	lbReq, err := l.buildLoadBalancerRequest(ctx, service, nodes, lb.Nodes)
 	if err != nil {
 		return fmt.Errorf("failed to create load balancer request: %s", err)
+	}
+	sharedLB := hasSharedLoadBalancerLabel(service)
+	if sharedLB {
+		lbReq.ForwardingRules = nil
 	}
 
 	if err := l.client.LoadBalancer.Update(ctx, lb.ID, lbReq); err != nil {
 		return fmt.Errorf("failed to update LB: %s", err)
 	}
 
+	if sharedLB {
+		if err := l.reconcileSharedForwardingRules(ctx, lb.ID, service); err != nil {
+			return fmt.Errorf("failed to reconcile shared LB forwarding rules: %s", err)
+		}
+	}
+
 	return nil
 }
 
-func (l *loadbalancers) EnsureLoadBalancerDeleted(ctx context.Context, clusterName string, service *v1.Service) error {
-	_, exists, err := l.GetLoadBalancer(ctx, clusterName, service)
+func (l *loadbalancers) EnsureLoadBalancerDeleted(ctx context.Context, _ string, service *v1.Service) error {
+	lb, err := l.getVultrLB(ctx, service)
 	if err != nil {
+		if err == errLbNotFound {
+			return nil // Already deleted or doesn't exist
+		}
 		return err
 	}
-	// This is the same as if we were to check if err == errLbNotFound {
-	if !exists {
-		return nil
-	}
 
-	lbName := l.GetLoadBalancerName(ctx, clusterName, service)
+	if hasSharedLoadBalancerLabel(service) {
+		referenced, referenceErr := l.sharedLoadBalancerStillReferenced(ctx, service, lb.ID)
+		if referenceErr != nil {
+			return referenceErr
+		}
 
-	lb, err := l.lbByName(ctx, lbName)
-	if err != nil {
-		return err
+		if referenced {
+			return l.deleteServiceForwardingRules(ctx, lb.ID, service)
+		}
 	}
 
 	err = l.client.LoadBalancer.Delete(ctx, lb.ID)
@@ -261,34 +334,401 @@ func (l *loadbalancers) EnsureLoadBalancerDeleted(ctx context.Context, clusterNa
 	return nil
 }
 
+func hasSharedLoadBalancerLabel(service *v1.Service) bool {
+	label, ok := service.Annotations[annoVultrLoadBalancerLabel]
+	return ok && label != ""
+}
+
+func (l *loadbalancers) reconcileSharedForwardingRules(ctx context.Context, lbID string, service *v1.Service) error {
+	desiredRules, err := buildForwardingRules(service)
+	if err != nil {
+		return err
+	}
+
+	existingRules, err := l.listForwardingRules(ctx, lbID)
+	if err != nil {
+		return err
+	}
+
+	existingByFrontend := map[string]govultr.ForwardingRule{}
+	for _, rule := range existingRules {
+		existingByFrontend[forwardingRuleFrontendKey(rule)] = rule
+	}
+
+	for _, desired := range desiredRules {
+		existing, ok := existingByFrontend[forwardingRuleFrontendKey(desired)]
+		if !ok {
+			if _, _, err := l.client.LoadBalancer.CreateForwardingRule(ctx, lbID, &desired); err != nil { //nolint:bodyclose
+				return err
+			}
+			continue
+		}
+
+		if forwardingRulesEqual(existing, desired) {
+			continue
+		}
+
+		if err := l.client.LoadBalancer.DeleteForwardingRule(ctx, lbID, existing.RuleID); err != nil {
+			return err
+		}
+		if _, _, err := l.client.LoadBalancer.CreateForwardingRule(ctx, lbID, &desired); err != nil { //nolint:bodyclose
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (l *loadbalancers) deleteServiceForwardingRules(ctx context.Context, lbID string, service *v1.Service) error {
+	desiredRules, err := buildForwardingRules(service)
+	if err != nil {
+		return err
+	}
+
+	serviceRuleFrontends := map[string]struct{}{}
+	for _, rule := range desiredRules {
+		serviceRuleFrontends[forwardingRuleFrontendKey(rule)] = struct{}{}
+	}
+
+	existingRules, err := l.listForwardingRules(ctx, lbID)
+	if err != nil {
+		return err
+	}
+
+	for _, rule := range existingRules {
+		if _, ok := serviceRuleFrontends[forwardingRuleFrontendKey(rule)]; !ok {
+			continue
+		}
+
+		if err := l.client.LoadBalancer.DeleteForwardingRule(ctx, lbID, rule.RuleID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (l *loadbalancers) listForwardingRules(ctx context.Context, lbID string) ([]govultr.ForwardingRule, error) {
+	listOptions := &govultr.ListOptions{PerPage: 25}
+	var rules []govultr.ForwardingRule
+
+	for {
+		pageRules, meta, resp, err := l.client.LoadBalancer.ListForwardingRules(ctx, lbID, listOptions)
+		if resp != nil {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				return nil, closeErr
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		rules = append(rules, pageRules...)
+		if meta == nil || meta.Links == nil || meta.Links.Next == "" {
+			break
+		}
+		listOptions.Cursor = meta.Links.Next
+	}
+
+	return rules, nil
+}
+
+func forwardingRuleFrontendKey(rule govultr.ForwardingRule) string {
+	return fmt.Sprintf("%s/%d", strings.ToLower(rule.FrontendProtocol), rule.FrontendPort)
+}
+
+func forwardingRulesEqual(a, b govultr.ForwardingRule) bool {
+	return strings.EqualFold(a.FrontendProtocol, b.FrontendProtocol) &&
+		a.FrontendPort == b.FrontendPort &&
+		strings.EqualFold(a.BackendProtocol, b.BackendProtocol) &&
+		a.BackendPort == b.BackendPort
+}
+
+func (l *loadbalancers) sharedLoadBalancerStillReferenced(ctx context.Context, service *v1.Service, lbID string) (bool, error) {
+	label := service.Annotations[annoVultrLoadBalancerLabel]
+	if err := l.GetKubeClient(); err != nil {
+		return false, fmt.Errorf("failed to get kubeclient: %s", err)
+	}
+
+	services, err := l.kubeClient.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("failed to list services referencing shared load balancer label %q: %s", label, err)
+	}
+
+	for i := range services.Items {
+		candidate := &services.Items[i]
+		if sameService(candidate, service) {
+			continue
+		}
+
+		if candidate.Annotations[annoVultrLoadBalancerLabel] == label {
+			return true, nil
+		}
+
+		if candidate.Annotations[annoVultrLoadBalancerID] == lbID && candidate.Annotations[annoVultrLoadBalancerLabel] != "" {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func sameService(a, b *v1.Service) bool {
+	if a.UID != "" && b.UID != "" {
+		return a.UID == b.UID
+	}
+
+	return a.Namespace == b.Namespace && a.Name == b.Name
+}
+
+func (l *loadbalancers) createNewLoadBalancer(ctx context.Context, clusterName string, service *v1.Service, nodes []*v1.Node) (*v1.LoadBalancerStatus, error) {
+	klog.Infof("Load balancer for cluster %q doesn't exist, creating", clusterName)
+	lbReq, err := l.buildLoadBalancerRequest(ctx, service, nodes, 1)
+	if err != nil {
+		return nil, err
+	}
+	lbReq.Region = l.zone
+	lb, _, err := l.client.LoadBalancer.Create(ctx, lbReq) //nolint:bodyclose
+	if err != nil {
+		return nil, fmt.Errorf("failed to create load-balancer: %s", err)
+	}
+	klog.Infof("Created load balancer %q", lb.ID)
+	// Set and validate the Vultr VLB ID annotation
+	if err := l.setAndValidateLBIDAnnotation(ctx, service, lb.ID); err != nil {
+		return nil, err
+	}
+	if lb.Status != lbStatusActive {
+		return nil, fmt.Errorf("load-balancer is not yet active - current status: %s", lb.Status)
+	}
+
+	ingress := l.buildLoadBalancerIngress(service, lb)
+	return &v1.LoadBalancerStatus{
+		Ingress: ingress,
+	}, nil
+}
+
+func (l *loadbalancers) buildLoadBalancerIngress(service *v1.Service, lb *govultr.LoadBalancer) []v1.LoadBalancerIngress {
+	var ingress []v1.LoadBalancerIngress
+	enabledIPv6 := checkEnabledIPv6(service)
+
+	// Check if hostname annotation is set and valid
+	if hostnameAnnotation, ok := service.Annotations[annoVultrHostname]; ok && hostnameAnnotation != "" {
+		if govalidator.IsDNSName(hostnameAnnotation) {
+			hostname := hostnameAnnotation
+			klog.Infof("setting hostname for loadbalancer to: %s", hostname)
+			ingress = append(ingress, v1.LoadBalancerIngress{Hostname: hostname})
+			return ingress
+		}
+		klog.Errorf("hostname %s is not a valid DNS name, using default behavior", hostnameAnnotation)
+	}
+
+	hostname := lb.Label
+	ingress = append(ingress, v1.LoadBalancerIngress{Hostname: hostname, IP: lb.IPV4})
+
+	if enabledIPv6 {
+		ingress = append(ingress, v1.LoadBalancerIngress{Hostname: hostname, IP: lb.IPV6})
+	}
+
+	return ingress
+}
+
+func (l *loadbalancers) validateLBIDConsistency(ctx context.Context, service *v1.Service, annotatedID string) error {
+	// Check if the annotated ID corresponds to a valid load balancer
+	annotatedLB, err := l.lbByID(ctx, annotatedID)
+	if err != nil {
+		// ID in annotation doesn't exist in API - clear annotation and signal re-creation needed
+		return l.clearInvalidLBIDAnnotation(ctx, service, annotatedID)
+	}
+
+	// Load balancer exists - verify it matches the service
+	serviceLBName := l.GetLoadBalancerName(ctx, "", service)
+	if annotatedLB.Label != serviceLBName {
+		return fmt.Errorf("load balancer %s (label: %s) does not match expected service name %s for service %s/%s",
+			annotatedID, annotatedLB.Label, serviceLBName, service.Namespace, service.Name)
+	}
+
+	// Valid load balancer found and matches service
+	return nil
+}
+
+func (l *loadbalancers) clearInvalidLBIDAnnotation(ctx context.Context, service *v1.Service, invalidID string) error {
+	klog.Infof("Load balancer ID %s not found in API, clearing annotation for service %s/%s",
+		invalidID, service.Namespace, service.Name)
+
+	if err := l.GetKubeClient(); err != nil {
+		return fmt.Errorf("failed to get kubeclient: %s", err)
+	}
+
+	// Use JSON patch to remove the annotation
+	patchData := []map[string]interface{}{
+		{
+			"op":   "remove",
+			"path": "/metadata/annotations/" + strings.ReplaceAll(annoVultrLoadBalancerID, "/", "~1"),
+		},
+	}
+
+	patchBytes, err := json.Marshal(patchData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal patch: %w", err)
+	}
+
+	_, err = l.kubeClient.CoreV1().Services(service.Namespace).
+		Patch(ctx, service.Name, types.JSONPatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to clear invalid load balancer ID annotation: %s", err)
+	}
+
+	// Return a special error type that signals re-creation is needed
+	return &LBRecreationNeededError{
+		Message: fmt.Sprintf("cleared invalid load balancer ID %q for service '%s/%s'",
+			invalidID, service.Namespace, service.Name),
+	}
+}
+
+// LBRecreationNeededError indicates that the load balancer annotation was cleared
+// and the creation process should be restarted
+type LBRecreationNeededError struct {
+	Message string
+}
+
+func (e *LBRecreationNeededError) Error() string {
+	return e.Message
+}
+
+func (l *loadbalancers) setAndValidateLBIDAnnotation(ctx context.Context, service *v1.Service, expectedLBID string) error {
+	if err := l.GetKubeClient(); err != nil {
+		return fmt.Errorf("failed to get kubeclient to update service: %s", err)
+	}
+
+	// Get current service to check existing annotation
+	currentService, err := l.kubeClient.CoreV1().Services(service.Namespace).Get(ctx, service.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get service: %s", err)
+	}
+
+	// Check if annotation already has the correct value
+	if existingID, hasAnnotation := currentService.Annotations[annoVultrLoadBalancerID]; hasAnnotation {
+		if existingID == expectedLBID {
+			return nil // Already correct
+		}
+
+		// Validate the existing ID using the original service for business logic
+		if validationErr := l.validateLBIDConsistency(ctx, service, existingID); validationErr != nil {
+			// Check if this is a re-creation needed error - if so, propagate it up
+			var LBRecreationNeededError *LBRecreationNeededError
+			if errors.As(validationErr, &LBRecreationNeededError) {
+				return validationErr
+			}
+			// Other validation errors should also be propagated
+			return validationErr
+		}
+
+		// Existing ID is valid but different from expected - this shouldn't happen
+		// in normal flow, but we'll update to expected anyway
+		klog.Warningf("Replacing valid but different load balancer ID %s with %s for service %s/%s",
+			existingID, expectedLBID, service.Namespace, service.Name)
+	}
+
+	// Patch the annotation atomically
+	patchData := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]string{
+				annoVultrLoadBalancerID: expectedLBID,
+			},
+		},
+	}
+
+	patchBytes, err := json.Marshal(patchData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal patch: %w", err)
+	}
+
+	_, err = l.kubeClient.CoreV1().Services(service.Namespace).Patch(ctx, service.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to patch service: %s", err)
+	}
+
+	klog.Infof("Successfully set load balancer ID annotation %s for service %s/%s", expectedLBID, service.Namespace, service.Name)
+	return nil
+}
+
 func (l *loadbalancers) lbByName(ctx context.Context, lbName string) (*govultr.LoadBalancer, error) {
 	listOptions := &govultr.ListOptions{
 		PerPage: 25,
 	}
 
+	var matches []*govultr.LoadBalancer
+
 	for {
-		lbs, meta, _, err := l.client.LoadBalancer.List(ctx, listOptions) //nolint:bodyclose
+		lbs, meta, resp, err := l.client.LoadBalancer.List(ctx, listOptions)
+		if resp != nil {
+			err = resp.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
 
-		for _, v := range lbs { //nolint
-			if v.Label == lbName {
-				return &v, nil
+		for i := range lbs { // Use index to avoid copying
+			if lbs[i].Label == lbName {
+				matches = append(matches, &lbs[i])
 			}
 		}
 
 		if meta.Links.Next == "" {
 			break
 		}
-
 		listOptions.Cursor = meta.Links.Next
 	}
 
-	return nil, errLbNotFound
+	if len(matches) == 0 {
+		return nil, errLbNotFound
+	}
+
+	if len(matches) > 1 {
+		var ids []string
+		for i := range matches { // Use index to avoid copying
+			ids = append(ids, matches[i].ID)
+		}
+		return nil, fmt.Errorf("multiple load balancers found with label %q: IDs %v - unique label required", lbName, ids)
+	}
+
+	return matches[0], nil
 }
 
-func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v1.Node, nodeCount int) (*govultr.LoadBalancerReq, error) {
+func (l *loadbalancers) lbByID(ctx context.Context, lbID string) (*govultr.LoadBalancer, error) {
+	vlb, _, err := l.client.LoadBalancer.Get(ctx, lbID) //nolint:bodyclose
+	if err != nil {
+		return nil, errLbNotFound
+	}
+
+	return vlb, nil
+}
+
+func (l *loadbalancers) getVultrLB(ctx context.Context, service *v1.Service) (*govultr.LoadBalancer, error) {
+	if id, ok := service.Annotations[annoVultrLoadBalancerID]; ok {
+		return l.lbByID(ctx, id)
+	}
+
+	return l.findLoadBalancerByName(ctx, service)
+}
+
+func (l *loadbalancers) findLoadBalancerByName(ctx context.Context, service *v1.Service) (*govultr.LoadBalancer, error) {
+	defaultLBName := getDefaultLBName(service)
+	if lb, err := l.lbByName(ctx, defaultLBName); err == nil {
+		return lb, nil
+	}
+
+	lbName := l.GetLoadBalancerName(ctx, "", service)
+	return l.lbByName(ctx, lbName)
+}
+
+// buildLoadBalancerRequest builds the create/update request. nodeCount is the
+// LB node count to send when the node-count annotation is not set: 1 on create,
+// the current lb.Nodes on update (so an update never shrinks an existing LB).
+func (l *loadbalancers) buildLoadBalancerRequest(ctx context.Context, service *v1.Service, nodes []*v1.Node, nodeCount int) (*govultr.LoadBalancerReq, error) {
 	stickySession, err := buildStickySession(service)
 	if err != nil {
 		return nil, err
@@ -309,6 +749,11 @@ func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v
 		return nil, err
 	}
 
+	timeout, err := getTimeout(service)
+	if err != nil {
+		return nil, err
+	}
+
 	var ssl *govultr.SSL
 	if secretName, ok := service.Annotations[annoVultrLBSSL]; ok {
 		ssl, err = l.GetSSL(service, secretName)
@@ -320,7 +765,18 @@ func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v
 		ssl = nil
 	}
 
-	firewallRules, err := buildFirewallRules(service)
+	var autoSSL *govultr.AutoSSL
+	if secretName, ok := service.Annotations[annoVultrLBAutoSSL]; ok {
+		autoSSL, err = l.GetAutoSSL(service, secretName)
+		if err != nil {
+			return nil, err
+		}
+		SecretWatcher.AddService(service, secretName)
+	} else {
+		autoSSL = nil
+	}
+
+	firewallRules, err := l.buildFirewallRules(ctx, service)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +785,7 @@ func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v
 		return nil, err
 	}
 
-	klog.V(logLevel).Infof("node count is currently %d\n", nodeCount)
+	klog.V(logLevelDebug).Infof("node count is currently %d", nodeCount)
 
 	if count, ok := service.Annotations[annoVultrNodeCount]; ok {
 		nodeCount, err = strconv.Atoi(count)
@@ -341,20 +797,26 @@ func (l *loadbalancers) buildLoadBalancerRequest(service *v1.Service, nodes []*v
 			return nil, fmt.Errorf("%s must be odd", annoVultrNodeCount)
 		}
 
-		klog.V(logLevel).Infof("setting node count to %d\n", nodeCount) //nolint
+		klog.V(logLevelDebug).Infof("setting node count to %d", nodeCount)
 	}
 
+	name := l.GetLoadBalancerName(context.Background(), "", service)
+
 	return &govultr.LoadBalancerReq{
-		Label:              getDefaultLBName(service),                        // will always be set
+		Label:              name,                                             // will always be set
 		Instances:          instances,                                        // will always be set
 		HealthCheck:        healthCheck,                                      // will always be set
 		StickySessions:     stickySession,                                    // need to check
 		ForwardingRules:    rules,                                            // all always be set
 		SSL:                ssl,                                              // will always be set
+		AutoSSL:            autoSSL,                                          // need to check
 		SSLRedirect:        govultr.BoolToBoolPtr(getSSLRedirect(service)),   // need to check
+		HTTP2:              govultr.BoolToBoolPtr(getHTTP2(service)),         // need to check
+		HTTP3:              govultr.BoolToBoolPtr(getHTTP3(service)),         // need to check
 		ProxyProtocol:      govultr.BoolToBoolPtr(getProxyProtocol(service)), // need to check
 		BalancingAlgorithm: getAlgorithm(service),                            // will always be set
 		FirewallRules:      firewallRules,                                    // need to check
+		Timeout:            timeout,                                          // need to check
 		VPC:                govultr.StringToStringPtr(vpc),                   // need to check
 		Nodes:              nodeCount,                                        // need to check
 	}, nil
@@ -414,11 +876,10 @@ func getStickySessionEnabled(service *v1.Service) string {
 		return "off"
 	}
 
-	if enabled == "off" {
-		return "off"
-	} else if enabled == "on" {
+	switch enabled {
+	case "on":
 		return "on"
-	} else {
+	default:
 		return "off"
 	}
 }
@@ -483,6 +944,7 @@ func getHealthCheckProtocol(service *v1.Service) (string, error) {
 	protocol := service.Annotations[annoVultrHealthCheckProtocol]
 
 	// add in https
+	protocol = strings.ToLower(protocol)
 	if protocol == "" {
 		if getHealthCheckPath(service) != "" {
 			return protocolHTTP, nil
@@ -490,8 +952,8 @@ func getHealthCheckProtocol(service *v1.Service) (string, error) {
 		return protocolTCP, nil
 	}
 
-	if protocol != protocolHTTP && protocol != protocolTCP {
-		return "", fmt.Errorf("invalid protocol : %s given in the anootation : %s", protocol, annoVultrHealthCheckProtocol)
+	if protocol != protocolHTTP && protocol != protocolTCP && protocol != protocolUDP {
+		return "", fmt.Errorf("invalid protocol : %s given in the annotation : %s", protocol, annoVultrHealthCheckProtocol)
 	}
 
 	return protocol, nil
@@ -587,14 +1049,15 @@ func getHealthCheckHealthy(service *v1.Service) (int, error) {
 }
 
 // buildInstanceList create list of nodes to be attached to a load balancer
+// Nodes without a Vultr provider ID (e.g. on-prem nodes in a hybrid cluster)
+// are skipped; an error is returned only if no Vultr nodes remain.
 func buildInstanceList(nodes []*v1.Node) ([]string, error) {
 	var list []string
-	var errs []error
 
 	for _, node := range nodes {
 		instanceID, err := vultrIDFromProviderID(node.Spec.ProviderID)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("error getting the provider ID %s : %s", node.Spec.ProviderID, err))
+			klog.V(logLevelDebug).Infof("skipping node %q for load balancer: error getting the provider ID %q : %s", node.Name, node.Spec.ProviderID, err)
 			continue
 		}
 
@@ -604,6 +1067,7 @@ func buildInstanceList(nodes []*v1.Node) ([]string, error) {
 	if len(list) == 0 {
 		return list, fmt.Errorf("no nodes found")
 	}
+
 	return list, nil
 }
 
@@ -630,25 +1094,26 @@ func buildForwardingRules(service *v1.Service) ([]govultr.ForwardingRule, error)
 			}
 		}
 
-		// Check frontend/backend port combinations (listed below what is acceptable)
-		// frontend = tcp: backend must be tcp
-		// frontend = https: backend can be http(s)
-		// frontend = http: backend can be http(s)
 		switch frontendProtocol {
-		case "tcp":
-			if backendProtocol != "tcp" {
+		case protocolUDP:
+			if backendProtocol != protocolUDP {
+				klog.Infof("When frontend proto is udp, backend default is udp, %q is out of supported range, setting backend to udp", backendProtocol)
+				backendProtocol = protocolUDP
+			}
+		case protocolTCP:
+			if backendProtocol != protocolTCP {
 				klog.Infof("When frontend proto is tcp, backend default is tcp, %q is out of supported range, setting backend to tcp", backendProtocol)
-				backendProtocol = "tcp"
+				backendProtocol = protocolTCP
 			}
-		case "http":
-			if backendProtocol != "http" && backendProtocol != "https" {
+		case protocolHTTP:
+			if backendProtocol != protocolHTTP && backendProtocol != protocolHTTPS {
 				klog.Infof("When frontend proto is http, backend default is http, %q is out of supported range, setting backend to http", backendProtocol)
-				backendProtocol = "http" // http is default
+				backendProtocol = protocolHTTP // http is default
 			}
-		case "https":
-			if backendProtocol != "http" && backendProtocol != "https" {
+		case protocolHTTPS:
+			if backendProtocol != protocolHTTP && backendProtocol != protocolHTTPS {
 				klog.Infof("When frontend proto is https, backend default is https, %q is out of supported range, setting backend to https", backendProtocol)
-				backendProtocol = "https" // https is default
+				backendProtocol = protocolHTTPS // https is default
 			}
 		}
 
@@ -658,23 +1123,15 @@ func buildForwardingRules(service *v1.Service) ([]govultr.ForwardingRule, error)
 		}
 		klog.Infof("Frontend: %q, Backend: %q", frontendProtocol, backendProtocol)
 
-		rule, err := buildForwardingRule(&port, frontendProtocol, backendProtocol) //nolint
-		if err != nil {
-			return nil, err
-		}
-
+		rule := buildForwardingRule(&port, frontendProtocol, backendProtocol)
 		rules = append(rules, *rule)
 	}
 
 	return rules, nil
 }
 
-func buildForwardingRule(port *v1.ServicePort, protocol, backendProtocol string) (*govultr.ForwardingRule, error) {
+func buildForwardingRule(port *v1.ServicePort, protocol, backendProtocol string) *govultr.ForwardingRule {
 	var rule govultr.ForwardingRule
-
-	if port.Protocol == portProtocolUDP {
-		return nil, fmt.Errorf("TCP protocol is only supported: received %s", port.Protocol)
-	}
 
 	rule.FrontendProtocol = protocol
 	rule.BackendProtocol = backendProtocol
@@ -684,7 +1141,7 @@ func buildForwardingRule(port *v1.ServicePort, protocol, backendProtocol string)
 	rule.FrontendPort = int(port.Port)
 	rule.BackendPort = int(port.NodePort)
 
-	return &rule, nil
+	return &rule
 }
 
 func getLBProtocol(service *v1.Service) string {
@@ -697,7 +1154,7 @@ func getLBProtocol(service *v1.Service) string {
 }
 
 func getHTTPSPorts(service *v1.Service) (map[int32]bool, error) {
-	ports, ok := service.Annotations[annoVultrLbHTTPSPorts]
+	ports, ok := service.Annotations[annoVultrLBHTTPSPorts]
 	if !ok {
 		return nil, nil
 	}
@@ -736,6 +1193,29 @@ func (l *loadbalancers) GetSSL(service *v1.Service, secretName string) (*govultr
 		Certificate: cert,
 	}
 	return &ssl, nil
+}
+
+func (l *loadbalancers) GetAutoSSL(service *v1.Service, secretName string) (*govultr.AutoSSL, error) {
+	if err := l.GetKubeClient(); err != nil {
+		return nil, err
+	}
+
+	secret, err := l.kubeClient.CoreV1().Secrets(service.Namespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	domainZone := string(secret.Data["domainZone"])
+	domainZone = strings.TrimSpace(domainZone)
+
+	subDomain := string(secret.Data["subDomain"])
+	subDomain = strings.TrimSpace(subDomain)
+
+	autoSSL := govultr.AutoSSL{
+		DomainZone: domainZone,
+		DomainSub:  subDomain,
+	}
+	return &autoSSL, nil
 }
 
 func (l *loadbalancers) GetKubeClient() error {
@@ -797,8 +1277,53 @@ func getProxyProtocol(service *v1.Service) bool {
 	return pass
 }
 
-func buildFirewallRules(service *v1.Service) ([]govultr.LBFirewallRule, error) {
+func getHTTP2(service *v1.Service) bool {
+	http2, ok := service.Annotations[annoVultrLBHTTP2]
+	if !ok {
+		return false
+	}
+
+	protocolHTTP2, err := strconv.ParseBool(http2)
+	if err != nil {
+		return false
+	}
+
+	return protocolHTTP2
+}
+
+func getHTTP3(service *v1.Service) bool {
+	http3, ok := service.Annotations[annoVultrLBHTTP3]
+	if !ok {
+		return false
+	}
+
+	protocolHTTP3, err := strconv.ParseBool(http3)
+	if err != nil {
+		return false
+	}
+
+	return protocolHTTP3
+}
+
+func getTimeout(service *v1.Service) (int, error) {
+	lbtimeout, ok := service.Annotations[annoVultrLBTimeout]
+	if !ok {
+		return defaultLBTimeout, nil
+	}
+
+	timeout, err := strconv.Atoi(lbtimeout)
+	if err != nil {
+		return 0, fmt.Errorf("invalid timeout value: %v", err)
+	}
+	return timeout, nil
+}
+
+func (l *loadbalancers) buildFirewallRules(ctx context.Context, service *v1.Service) ([]govultr.LBFirewallRule, error) {
 	lbFWRules := []govultr.LBFirewallRule{}
+	if _, ok := service.Annotations[annoVultrFirewallRulesCM]; ok {
+		return l.getFirewallRulesFromConfigMap(ctx, service)
+	}
+
 	fwRules := getFirewallRules(service)
 	if fwRules == "" {
 		return lbFWRules, nil
@@ -847,6 +1372,93 @@ func getFirewallRules(service *v1.Service) string {
 	return fwRules
 }
 
+func (l *loadbalancers) getFirewallRulesFromConfigMap(ctx context.Context, service *v1.Service) ([]govultr.LBFirewallRule, error) {
+	cmName := strings.TrimSpace(service.Annotations[annoVultrFirewallRulesCM])
+	if cmName == "" {
+		return nil, fmt.Errorf("%s annotation must not be empty", annoVultrFirewallRulesCM)
+	}
+
+	if err := l.GetKubeClient(); err != nil {
+		return nil, err
+	}
+
+	cm, err := l.kubeClient.CoreV1().ConfigMaps(service.Namespace).Get(ctx, cmName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	fwRulesYAML, ok := cm.Data[firewallRulesCMKey]
+	if !ok {
+		return nil, fmt.Errorf("configmap %s/%s is missing %q key", service.Namespace, cmName, firewallRulesCMKey)
+	}
+
+	var fwRulesConfig struct {
+		FirewallRules firewallRulesByIPType `yaml:"firewallRules"`
+	}
+	if err := yaml.Unmarshal([]byte(fwRulesYAML), &fwRulesConfig.FirewallRules); err != nil {
+		return nil, fmt.Errorf("configmap %s/%s has invalid firewall rules YAML: %w", service.Namespace, cmName, err)
+	}
+
+	if len(fwRulesConfig.FirewallRules.V4) == 0 && len(fwRulesConfig.FirewallRules.V6) == 0 {
+		if err := yaml.Unmarshal([]byte(fwRulesYAML), &fwRulesConfig); err != nil {
+			return nil, fmt.Errorf("configmap %s/%s has invalid firewall rules YAML: %w", service.Namespace, cmName, err)
+		}
+	}
+
+	fwRules := make([]govultr.LBFirewallRule, 0, len(fwRulesConfig.FirewallRules.V4)+len(fwRulesConfig.FirewallRules.V6))
+	for _, fwRule := range fwRulesConfig.FirewallRules.V4 {
+		fwRule.IPType = "v4"
+		if err := validateFirewallRule(fwRule); err != nil {
+			return nil, err
+		}
+		fwRules = append(fwRules, fwRule)
+	}
+	for _, fwRule := range fwRulesConfig.FirewallRules.V6 {
+		fwRule.IPType = "v6"
+		if err := validateFirewallRule(fwRule); err != nil {
+			return nil, err
+		}
+		fwRules = append(fwRules, fwRule)
+	}
+
+	return fwRules, nil
+}
+
+type firewallRulesByIPType struct {
+	V4 []govultr.LBFirewallRule `yaml:"v4"`
+	V6 []govultr.LBFirewallRule `yaml:"v6"`
+}
+
+func validateFirewallRule(fwRule govultr.LBFirewallRule) error {
+	if fwRule.Source == "" {
+		return fmt.Errorf("loadbalancer fw rules : source is required")
+	}
+
+	if fwRule.Source != "cloudflare" {
+		ip, _, err := net.ParseCIDR(fwRule.Source)
+		if err != nil {
+			return fmt.Errorf("loadbalancer fw rules : source %s is invalid", fwRule.Source)
+		}
+
+		if fwRule.IPType == "v4" && ip.To4() == nil {
+			return fmt.Errorf("loadbalancer fw rules : source %s is not a v4 CIDR", fwRule.Source)
+		}
+		if fwRule.IPType == "v6" && ip.To4() != nil {
+			return fmt.Errorf("loadbalancer fw rules : source %s is not a v6 CIDR", fwRule.Source)
+		}
+	}
+
+	if fwRule.IPType != "v4" && fwRule.IPType != "v6" {
+		return fmt.Errorf("loadbalancer fw rules : ip_type %s is invalid", fwRule.IPType)
+	}
+
+	if fwRule.Port == 0 {
+		return fmt.Errorf("loadbalancer fw rules : port is required")
+	}
+
+	return nil
+}
+
 func getVPC(service *v1.Service) (string, error) {
 	var vpc string
 	pn, pnOk := service.Annotations[annoVultrPrivateNetwork]
@@ -889,6 +1501,7 @@ func getBackendProtocol(service *v1.Service) string {
 		return ""
 	}
 
+	proto = strings.ToLower(proto)
 	switch proto {
 	case "http":
 		return protocolHTTP
@@ -896,6 +1509,8 @@ func getBackendProtocol(service *v1.Service) string {
 		return protocolHTTPS
 	case "tcp":
 		return protocolTCP
+	case "udp":
+		return protocolUDP
 	default:
 		return ""
 	}
@@ -919,4 +1534,59 @@ func checkEnabledIPv6(service *v1.Service) bool {
 	}
 
 	return false
+}
+
+func isLBActivating(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "still activating") ||
+		strings.Contains(msg, "activation in progress") ||
+		strings.Contains(msg, "activating")
+}
+
+func (l *loadbalancers) retryLBUpdateAsync(ctx context.Context, lbID, clusterName string, service *v1.Service, nodes []*v1.Node) {
+	bgCtx, cancel := context.WithTimeout(ctx, syncTimeout*time.Minute)
+
+	go func() {
+		defer cancel()
+
+		backoffs := []time.Duration{
+			2 * time.Second,
+			3 * time.Second,
+			5 * time.Second,
+			8 * time.Second,
+			13 * time.Second,
+			21 * time.Second,
+			34 * time.Second,
+		}
+
+		for _, d := range backoffs {
+			select {
+			case <-bgCtx.Done():
+				klog.V(logLevelDebug).Infof("Background LB %s update canceled/expired: %v", lbID, bgCtx.Err())
+				return
+			case <-time.After(d):
+			}
+
+			lb, getErr := l.getVultrLB(bgCtx, service)
+			if getErr != nil {
+				klog.V(logLevelTrace).Infof("Background LB %s: getVultrLB failed, will retry: %v", lbID, getErr)
+				continue
+			}
+
+			if err := l.updateLoadBalancerWithLB(bgCtx, clusterName, service, nodes, lb); err != nil {
+				if isLBActivating(err) {
+					klog.V(logLevelTrace).Infof("Background LB %s update still activating, will retry: %v", lbID, err)
+					continue
+				}
+				klog.V(logLevelDebug).Infof("Background LB %s update stopped (non-activating error): %v", lbID, err)
+				return
+			}
+
+			klog.V(logLevelError).Infof("Background LB %s update finalized after activation", lbID)
+			return
+		}
+	}()
 }

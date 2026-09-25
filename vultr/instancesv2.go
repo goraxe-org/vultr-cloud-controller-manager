@@ -30,67 +30,147 @@ func newInstancesV2(client *govultr.Client) cloudprovider.InstancesV2 {
 	return &instancesv2{client}
 }
 
-// InstanceExists return bool whether or not the instance exists
+// InstanceExists return bool whether the instance exists
 func (i *instancesv2) InstanceExists(ctx context.Context, node *v1.Node) (bool, error) {
-	// Nodes without a Vultr provider ID are not managed by this CCM.
-	// Treat them as existing to prevent the node lifecycle controller
-	// from deleting them when they become NotReady.
+	// Nodes without a Vultr provider ID are not managed by this CCM (e.g. on-prem
+	// nodes in a hybrid cluster). Report them as existing so the cloud node
+	// lifecycle controller never deletes their Node object when they go NotReady.
 	if node.Spec.ProviderID == "" {
 		return true, nil
 	}
 
-	newNode, err := i.getVultrInstance(ctx, node)
-	if err != nil {
-		log.Printf("instance(%s) exists check failed: %e", node.Spec.ProviderID, err) //nolint
-		if strings.Contains(err.Error(), "invalid instance ID") {
-			return false, nil
+	bm := false
+
+	if label, ok := node.Labels["vultr.com/baremetal"]; ok {
+		if label == "true" {
+			bm = true
 		}
-		if strings.Contains(err.Error(), "instance not found") {
-			return false, nil
-		}
-		return false, err
 	}
 
-	if newNode.Status == ACTIVE || newNode.Status == PENDING || newNode.Status == RESIZING {
-		log.Printf("instance(%s) status is: %s", newNode.Label, newNode.Status) //nolint
-		return true, nil
+	if bm {
+		newNode, err := i.getVultrBareMetal(ctx, node)
+		if err != nil {
+			log.Printf("baremetal(%s) exists check failed: %e", node.Spec.ProviderID, err) //nolint
+			if strings.Contains(err.Error(), "invalid baremetal ID") {
+				return false, nil
+			}
+			if strings.Contains(err.Error(), "not found") {
+				return false, nil
+			}
+			if strings.Contains(err.Error(), "Invalid server") {
+				return false, nil
+			}
+			return false, err
+		}
+		if newNode.Status == ACTIVE || newNode.Status == PENDING {
+			log.Printf("baremetal(%s) status is: %s", newNode.Label, newNode.Status) //nolint
+			return true, nil
+		}
+	} else {
+		newNode, err := i.getVultrInstance(ctx, node)
+		if err != nil {
+			log.Printf("instance(%s) exists check failed: %e", node.Spec.ProviderID, err) //nolint
+			if strings.Contains(err.Error(), "invalid instance ID") {
+				return false, nil
+			}
+			if strings.Contains(err.Error(), "instance not found") {
+				return false, nil
+			}
+			return false, err
+		}
+		if newNode.Status == ACTIVE || newNode.Status == PENDING || newNode.Status == RESIZING {
+			log.Printf("instance(%s) status is: %s", newNode.Label, newNode.Status) //nolint
+			return true, nil
+		}
 	}
+
 	return false, nil
 }
 
-// InstanceShutdown returns bool whether or not the instance is running or powered off
+// InstanceShutdown returns bool whether the instance is running or powered off
 func (i *instancesv2) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, error) {
+	// Nodes without a Vultr provider ID are not managed by this CCM.
 	if node.Spec.ProviderID == "" {
 		return false, nil
 	}
 
-	newNode, err := i.getVultrInstance(ctx, node)
-	if err != nil {
-		log.Printf("instance(%s) shutdown check failed: %e", node.Spec.ProviderID, err) //nolint
-		return false, err
+	bm := false
+
+	if label, ok := node.Labels["vultr.com/baremetal"]; ok {
+		if label == "true" {
+			bm = true
+		}
 	}
 
-	if newNode.PowerStatus != "running" {
-		return true, nil
+	if bm {
+		newNode, err := i.getVultrBareMetal(ctx, node)
+		if err != nil {
+			log.Printf("baremetal(%s) shutdown check failed: %e", node.Spec.ProviderID, err) //nolint
+			return false, err
+		}
+		if newNode.Status == ACTIVE || newNode.Status == PENDING { //nolint
+			return false, nil
+		}
+	} else {
+		newNode, err := i.getVultrInstance(ctx, node)
+		if err != nil {
+			log.Printf("instance(%s) shutdown check failed: %e", node.Spec.ProviderID, err) //nolint
+			return false, err
+		}
+		if newNode.PowerStatus != "running" {
+			return true, nil
+		}
 	}
+
 	return false, nil
 }
 
 // InstanceMetadata returns a struct of type InstanceMetadata containing the node information
 func (i *instancesv2) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloudprovider.InstanceMetadata, error) {
+	// Nodes without a Vultr provider ID are not managed by this CCM.
 	if node.Spec.ProviderID == "" {
 		return nil, fmt.Errorf("node %s has no provider ID, not managed by Vultr", node.Name)
 	}
 
+	bm := false
+
+	if label, ok := node.Labels["vultr.com/baremetal"]; ok {
+		if label == "true" {
+			bm = true
+		}
+	}
+
+	if bm {
+		newNode, err := i.getVultrBareMetal(ctx, node)
+		if err != nil {
+			log.Printf("baremetal(%s) metadata check failed: %e", node.Spec.ProviderID, err) //nolint
+			return nil, err
+		}
+		nodeAddress, err := i.nodeBareMetalAddresses(newNode)
+		if err != nil {
+			log.Printf("baremetal(%s) does not have addresses: %v", node.Name, err)
+			return nil, fmt.Errorf("baremetal %q does not have addresses: %w", node.Name, err)
+		}
+
+		vultrNode := cloudprovider.InstanceMetadata{
+			InstanceType:  newNode.Plan,
+			ProviderID:    fmt.Sprintf("vultr://%s", newNode.ID),
+			Region:        newNode.Region,
+			NodeAddresses: nodeAddress,
+		}
+
+		log.Printf("returned node metadata: %v", vultrNode) //nolint
+		return &vultrNode, nil
+	}
 	newNode, err := i.getVultrInstance(ctx, node)
 	if err != nil {
 		log.Printf("instance(%s) metadata check failed: %e", node.Spec.ProviderID, err) //nolint
 		return nil, err
 	}
-
-	nodeAddress, err := i.nodeAddresses(newNode)
+	nodeAddress, err := i.nodeInstanceAddresses(newNode)
 	if err != nil {
-		return nil, err
+		log.Printf("instance(%s) does not have addresses: %v", node.Name, err)
+		return nil, fmt.Errorf("instance %q does not have addresses: %w", node.Name, err)
 	}
 
 	vultrNode := cloudprovider.InstanceMetadata{
@@ -104,11 +184,11 @@ func (i *instancesv2) InstanceMetadata(ctx context.Context, node *v1.Node) (*clo
 	return &vultrNode, nil
 }
 
-// nodeAddresses gathers public/private IP addresses and returns a []v1.NodeAddress .
-func (i *instancesv2) nodeAddresses(instance *govultr.Instance) ([]v1.NodeAddress, error) {
+// nodeInstanceAddresses gathers public/private IP addresses and returns a []v1.NodeAddress .
+func (i *instancesv2) nodeInstanceAddresses(instance *govultr.Instance) ([]v1.NodeAddress, error) {
 	var addresses []v1.NodeAddress
 
-	if reflect.DeepEqual(instance, *&govultr.Instance{}) { //nolint
+	if instance == nil || reflect.DeepEqual(instance, &govultr.Instance{}) {
 		return nil, fmt.Errorf("instance is empty %v", instance)
 	}
 
@@ -117,15 +197,30 @@ func (i *instancesv2) nodeAddresses(instance *govultr.Instance) ([]v1.NodeAddres
 		Address: instance.Label,
 	})
 
-	// make sure we have either pubic and private ip
-	if instance.InternalIP == "" || instance.MainIP == "" {
-		return nil, fmt.Errorf("require both public and private IP")
+	// Check conditions for internal and main IP
+	if instance.InternalIP == "" && instance.MainIP == "" {
+		return nil, fmt.Errorf("require at least one of internal or public IP")
 	}
 
-	addresses = append(addresses,
-		v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.InternalIP}, // private IP
-		v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.MainIP},     // public IP
-	)
+	// Handle the case where both IPs are provided
+	if instance.InternalIP != "" && instance.MainIP != "" {
+		addresses = append(addresses,
+			v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.InternalIP}, // private IP
+			v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.MainIP},     // public IP
+		)
+	} else if instance.InternalIP == "" && instance.MainIP != "" {
+		// If internal IP is empty but main IP is not, use main IP for both
+		addresses = append(addresses,
+			v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.MainIP}, // treat main IP as internal IP
+			v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.MainIP}, // public IP
+		)
+	} else if instance.InternalIP != "" && instance.MainIP == "" {
+		// If main IP is empty but internal IP is not, use internal IP for both
+		addresses = append(addresses,
+			v1.NodeAddress{Type: v1.NodeInternalIP, Address: instance.InternalIP}, // private IP
+			v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.InternalIP}, // treat internal IP as external IP
+		)
+	}
 
 	if instance.V6MainIP != "" {
 		addresses = append(addresses, v1.NodeAddress{Type: v1.NodeExternalIP, Address: instance.V6MainIP}) // IPv6
@@ -136,11 +231,7 @@ func (i *instancesv2) nodeAddresses(instance *govultr.Instance) ([]v1.NodeAddres
 
 // getVultrInstance attempts to obtain Vultr Instance from Vultr API
 func (i *instancesv2) getVultrInstance(ctx context.Context, node *v1.Node) (*govultr.Instance, error) {
-	skipID := false
-
-	if node.Spec.ProviderID == "" {
-		skipID = true
-	}
+	skipID := node.Spec.ProviderID == ""
 
 	if node.Name == "" {
 		return nil, fmt.Errorf("node name cannot be empty")
@@ -153,14 +244,14 @@ func (i *instancesv2) getVultrInstance(ctx context.Context, node *v1.Node) (*gov
 			return nil, err
 		}
 
-		newNode, err := vultrByID(ctx, i.client, id)
+		newNode, err := vultrByInstanceID(ctx, i.client, id)
 		if err != nil {
 			log.Printf("instance(%s) by ID failed: %e", node.Spec.ProviderID, err) //nolint
 			return nil, err
 		}
 		return newNode, nil
 	}
-	newNode, err := vultrByName(ctx, i.client, types.NodeName(node.Name))
+	newNode, err := vultrByInstanceName(ctx, i.client, types.NodeName(node.Name))
 	if err != nil {
 		log.Printf("instance(%s) by name failed: %e", node.Name, err) //nolint
 		return nil, err

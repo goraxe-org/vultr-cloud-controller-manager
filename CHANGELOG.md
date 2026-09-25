@@ -38,8 +38,131 @@
 * update dockerfile ([4a5558a](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/4a5558acd340d110ae12053aa83156e3aa045d6a))
 
 # Change Log
-## [v0.10.1](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.10.0...v0.10.1) (2023-11-27)
-* Fix bug with VLB node annotation failing to be set [PR #220](https://github.com/vultr/vultr-cloud-controller-manager/pull/220)
+## [v0.18.3](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.18.2...v0.18.3) (2026-09-16)
+### Bug Fixes
+* Prevent instance address lookup from panicking on empty Vultr API responses
+* Return and log clear errors when instances or bare metal servers have no address data
+
+## [v0.18.2](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.18.1...v0.18.2) (2026-09-08)
+### Bug Fixes
+* Update bare metal not-found error matching [PR 351](https://github.com/vultr/vultr-cloud-controller-manager/pull/351)
+
+## [v0.18.1](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.18.0...v0.18.1) (2026-07-29)
+### Bug Fixes
+* Remove deprecated VPC2 lookups for bare metal instances
+
+## [v0.18.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.17.0...v0.18.0) (2026-07-08)
+### Enhancements
+* Add ConfigMap support for load balancer firewall rules [PR 348](https://github.com/vultr/vultr-cloud-controller-manager/pull/348)
+* Add multi-service load balancer support [PR 347](https://github.com/vultr/vultr-cloud-controller-manager/pull/347)
+
+## [v0.17.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.16.0...v0.17.0) (2026-03-13)
+### Dependencies
+* Update go version from v1.24 to v1.26 [PR 342](https://github.com/vultr/vultr-cloud-controller-manager/pull/342)
+
+### Enhancements
+* Add UDP support to CCM [PR 340](https://github.com/vultr/vultr-cloud-controller-manager/pull/340)
+
+### Automation
+* Update github action workflow versions [PR 341](https://github.com/vultr/vultr-cloud-controller-manager/pull/341)
+* Replace deprecated goreleaser template [PR 343](https://github.com/vultr/vultr-cloud-controller-manager/pull/343)
+
+## [v0.16.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.15.0...v0.16.0) (2025-11-07)
+### Bug Fixes
+* Resolve Vultr Load Balancer status update failures during activation
+
+## [v0.15.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.14.0...v0.15.0) (2025-10-10)
+### Dependencies
+* Bump github.com/spf13/pflag from 1.0.6 to 1.0.10 [PR 328](https://github.com/vultr/vultr-cloud-controller-manager/pull/328)
+* Bump github.com/vultr/govultr/v3 from 3.15.0 to 3.24.0 [PR 327](https://github.com/vultr/vultr-cloud-controller-manager/pull/327)
+* Bump golang.org/x/oauth2 from 0.27.0 to 0.32.0 [PR 327](https://github.com/vultr/vultr-cloud-controller-manager/pull/325)
+* Bump k8s.io/cloud-provider from 0.31.1 to 0.34.1 [PR 322](https://github.com/vultr/vultr-cloud-controller-manager/pull/322)
+
+### Enhancements
+* Add Auto SSL annotation support [PR 296](https://github.com/vultr/vultr-cloud-controller-manager/pull/296)
+* Make logs quote IDs in output [PR 320](https://github.com/vultr/vultr-cloud-controller-manager/pull/320)
+* Change kubernetes updates calls to patch [PR 312](https://github.com/vultr/vultr-cloud-controller-manager/pull/312)
+* Add more robust ID checking for load balancers [PR 310](https://github.com/vultr/vultr-cloud-controller-manager/pull/310)
+* Update CCM daemonset tolerations to use affinity [PR 297](https://github.com/vultr/vultr-cloud-controller-manager/pull/297)
+* Support non VPC VM instances [PR 294](https://github.com/vultr/vultr-cloud-controller-manager/pull/294)
+
+### Automation
+* Migrate golangci-lint config to v2 [PR 326](https://github.com/vultr/vultr-cloud-controller-manager/pull/326)
+
+### Documentation
+* Add notice for VPC2 deprecation [PR 329](https://github.com/vultr/vultr-cloud-controller-manager/pull/329)
+
+### New Contributors
+* @vrabbi made their first contribution in [PR 294](https://github.com/vultr/vultr-cloud-controller-manager/pull/294)
+
+## [v0.14.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.13.3...v0.14.0) (2025-03-06)
+
+### Dependencies
+* Update go to v1.24 and github workflows [PR 288](https://github.com/vultr/vultr-cloud-controller-manager/pull/280)
+
+* Update govultr to v3.15.0 [PR 290](https://github.com/vultr/vultr-cloud-controller-manager/pull/290)
+
+### Enhancements
+* Add HTTP2/3 and Timeout annonation support  [PR 230](https://github.com/vultr/vultr-cloud-controller-manager/pull/291)
+
+* Handle "Invalid server" error for bare metal check [PR 287](https://github.com/vultr/vultr-cloud-controller-manager/pull/287)
+
+### Automation
+
+* Remove deprecated linters [PR 289](https://github.com/vultr/vultr-cloud-controller-manager/pull/289)
+
+## [v0.13.3](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.13.2...v0.13.3) (2024-11-04)
+
+* Update govultr from v3.9.1 to v3.11.2 [PR 283](https://github.com/vultr/vultr-cloud-controller-manager/pull/283)
+
+## [v0.13.2](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.13.1...v0.13.2) (2024-10-28)
+
+### Dependencies
+* Update go to v1.23 and github workflows [PR 280](https://github.com/vultr/vultr-cloud-controller-manager/pull/280)
+
+## [v0.13.1](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.13.0...v0.13.1) (2024-08-19)
+### Bug Fixes
+* Load Balancers: Resolve issues with hairpinning by introducing hostname workaround [PR 268](https://github.com/vultr/vultr-cloud-controller-manager/pull/268)
+
+## [v0.13.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.12.0...v0.13.0) (2024-08-12)
+### Bug Fixes
+* Load Balancers: Get service before checking annotations to resolve nil map errors [PR 262](https://github.com/vultr/vultr-cloud-controller-manager/pull/262)
+
+### Dependencies
+* Update go to v1.21 [PR 248](https://github.com/vultr/vultr-cloud-controller-manager/pull/248)
+* Bump golang.org/x/net from 0.22.0 to 0.23.0 [PR 245](https://github.com/vultr/vultr-cloud-controller-manager/pull/245)
+* Update otel from v1.18.0 to v1.20.0 [PR 258](https://github.com/vultr/vultr-cloud-controller-manager/pull/258)
+* Bump github.com/vultr/govultr/v3 from 3.6.4 to 3.8.1 [PR 259](https://github.com/vultr/vultr-cloud-controller-manager/pull/259)
+* Bump k8s.io/klog/v2 from 2.120.1 to 2.130.1 [PR 261](https://github.com/vultr/vultr-cloud-controller-manager/pull/261)
+
+### Automation
+* Update mattermost notification workflows [PR 246](https://github.com/vultr/vultr-cloud-controller-manager/pull/246)
+* Fix mattermost notifications [PR 247](https://github.com/vultr/vultr-cloud-controller-manager/pull/247)
+* Goreleaser and golangci-lint workflows updates [PR 253](https://github.com/vultr/vultr-cloud-controller-manager/pull/253)
+
+### New Contributors
+* @mondragonfx made their first contribution in [PR 248](https://github.com/vultr/vultr-cloud-controller-manager/pull/248)
+
+## [v0.12.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.11.0...v0.12.0) (2024-04-02)
+### Enhancements
+* Add ability for load balancer labels to be updated [PR 230](https://github.com/vultr/vultr-cloud-controller-manager/pull/230)
+
+### Documentation
+* Document https value option to LB protocol annotation [PR 231](https://github.com/vultr/vultr-cloud-controller-manager/pull/231)
+
+### Dependencies
+* Bump golang.org/x/crypto from 0.13.0 to 0.17.0 [PR 223](https://github.com/vultr/vultr-cloud-controller-manager/pull/223)
+* Bump golang.org/x/oauth2 from 0.12.0 to 0.18.0 [PR 232](https://github.com/vultr/vultr-cloud-controller-manager/pull/232)
+* Bump google.golang.org/grpc from 1.58.0 to 1.58.3 [PR 216](https://github.com/vultr/vultr-cloud-controller-manager/pull/216)
+* Bump k8s.io/klog/v2 from 2.100.1 to 2.120.1 [PR 233](https://github.com/vultr/vultr-cloud-controller-manager/pull/233)
+* Bump google.golang.org/protobuf from 1.31.0 to 1.33.0 [PR 234](https://github.com/vultr/vultr-cloud-controller-manager/pull/234)
+* Bump github.com/vultr/govultr/v3 from 3.6.1 to 3.6.4 [PR 237](https://github.com/vultr/vultr-cloud-controller-manager/pull/237)
+
+## [v0.11.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.10.0...v0.11.0) (2024-01-16)
+### Enhancements
+* Add annotation to create a load balancer on a service [PR 213](https://github.com/vultr/vultr-cloud-controller-manager/pull/213)
+* Add check for firewall type of IPv6 [PR 212](https://github.com/vultr/vultr-cloud-controller-manager/pull/212)
+* Add support for bare metal nodes [PR 228](https://github.com/vultr/vultr-cloud-controller-manager/pull/228)
 
 ## [v0.10.0](https://github.com/vultr/vultr-cloud-controller-manager/compare/v0.9.0...v0.10.0) (2023-09-18)
 * Update to Go v1.20 [PR #186](https://github.com/vultr/vultr-cloud-controller-manager/pull/186)
