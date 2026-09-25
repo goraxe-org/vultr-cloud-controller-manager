@@ -1043,16 +1043,23 @@ func getHealthCheckHealthy(service *v1.Service) (int, error) {
 }
 
 // buildInstanceList create list of nodes to be attached to a load balancer
+// Nodes without a Vultr provider ID (e.g. on-prem nodes in a hybrid cluster)
+// are skipped; an error is returned only if no Vultr nodes remain.
 func buildInstanceList(nodes []*v1.Node) ([]string, error) {
 	var list []string
 
 	for _, node := range nodes {
 		instanceID, err := vultrIDFromProviderID(node.Spec.ProviderID)
 		if err != nil {
-			return nil, fmt.Errorf("error getting the provider ID %q : %s", node.Spec.ProviderID, err)
+			klog.V(logLevelDebug).Infof("skipping node %q for load balancer: error getting the provider ID %q : %s", node.Name, node.Spec.ProviderID, err)
+			continue
 		}
 
 		list = append(list, instanceID)
+	}
+
+	if len(list) == 0 {
+		return list, fmt.Errorf("no nodes found")
 	}
 
 	return list, nil

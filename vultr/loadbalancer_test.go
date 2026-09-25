@@ -408,7 +408,9 @@ func testSharedLabelMergeForwardingRules(t *testing.T, annotations map[string]st
 		},
 	}
 
-	err := lb.UpdateLoadBalancer(context.Background(), "cluster-name", svc, nil)
+	// buildInstanceList errors when no Vultr nodes are passed, so attach one.
+	nodes := []*v1.Node{vultrNode("node1", "vultr://123")}
+	err := lb.UpdateLoadBalancer(context.Background(), "cluster-name", svc, nodes)
 	if err != nil {
 		t.Fatalf("expected nil got %s", err.Error())
 	}
@@ -520,4 +522,83 @@ func sharedLabelService(name, uid string, port, nodePort int32) *v1.Service {
 
 func typesUID(uid string) types.UID {
 	return types.UID(uid)
+}
+
+func vultrNode(name, providerID string) *v1.Node {
+	return &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       v1.NodeSpec{ProviderID: providerID},
+	}
+}
+
+func TestBuildInstanceList_SkipsNodesWithoutProviderID(t *testing.T) {
+	nodes := []*v1.Node{
+		vultrNode("master-1", ""),
+		vultrNode("k8s-node-7", "vultr://75b95d83-47e2-4c0f-b273-cc9ce2b456f8"),
+		vultrNode("home-node-1", ""),
+		vultrNode("k8s-node-12", "vultr://0a1b2c3d-0000-4c0f-b273-cc9ce2b456f8"),
+		vultrNode("home-node-2", ""),
+	}
+
+	actual, err := buildInstanceList(nodes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []string{"75b95d83-47e2-4c0f-b273-cc9ce2b456f8", "0a1b2c3d-0000-4c0f-b273-cc9ce2b456f8"}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("expected %v got %v", expected, actual)
+	}
+}
+
+func TestBuildInstanceList_ErrorsWhenNoVultrNodes(t *testing.T) {
+	for name, nodes := range map[string][]*v1.Node{
+		"all home nodes": {vultrNode("master-1", ""), vultrNode("home-node-1", "")},
+		"no nodes":       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			actual, err := buildInstanceList(nodes)
+			if err == nil {
+				t.Fatalf("expected an error, got list %v", actual)
+			}
+			if len(actual) != 0 {
+				t.Fatalf("expected empty list, got %v", actual)
+			}
+		})
+	}
+}
+
+func TestLoadbalancers_UpdateLoadBalancer_MixedNodesOnlyAttachesVultrNodes(t *testing.T) {
+	fakeLoadBalancer := &fakeLB{}
+	lb := &loadbalancers{
+		client: &govultr.Client{LoadBalancer: fakeLoadBalancer},
+		zone:   "ewr",
+	}
+
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "lb-name",
+			Namespace:   v1.NamespaceDefault,
+			UID:         "lb-name",
+			Annotations: map[string]string{annoVultrLoadBalancerID: "6334f227-6d96-4cbd-9bcb-5be0759354fa"},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{Name: "test", Protocol: "TCP", Port: 80, NodePort: 30080}},
+		},
+	}
+	nodes := []*v1.Node{
+		vultrNode("master-1", ""),
+		vultrNode("k8s-node-7", "vultr://123"),
+		vultrNode("home-node-1", ""),
+	}
+
+	if err := lb.UpdateLoadBalancer(context.Background(), "cluster-name", svc, nodes); err != nil {
+		t.Fatalf("expected nil got %s", err.Error())
+	}
+	if fakeLoadBalancer.updatedReq == nil {
+		t.Fatal("expected load balancer update request")
+	}
+	if !reflect.DeepEqual(fakeLoadBalancer.updatedReq.Instances, []string{"123"}) {
+		t.Fatalf("expected only the Vultr node to be attached, got %v", fakeLoadBalancer.updatedReq.Instances)
+	}
 }
