@@ -8,6 +8,7 @@ import (
 
 	"github.com/vultr/govultr/v3"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestInstancesV2_NodeInstanceAddressesRejectsEmptyInstance(t *testing.T) {
@@ -190,5 +191,59 @@ func TestInstances_CurrentNodeName(t *testing.T) {
 
 	if actual != "ccm-test" {
 		t.Errorf("expcted %+v got %+v", "ccm-test", actual)
+	}
+}
+
+// Nodes without a provider ID (on-prem nodes in a hybrid cluster) must never be
+// reported as missing, or the cloud node lifecycle controller deletes them.
+// The client has no Instance service, so any Vultr API lookup would panic.
+func TestInstancesV2_EmptyProviderID(t *testing.T) {
+	instances := newInstancesV2(&govultr.Client{})
+
+	for _, node := range []*v1.Node{
+		{ObjectMeta: metav1.ObjectMeta{Name: "home-node-1"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "home-bm-1", Labels: map[string]string{"vultr.com/baremetal": "true"}}},
+	} {
+		t.Run(node.Name, func(t *testing.T) {
+			exists, err := instances.InstanceExists(context.TODO(), node)
+			if err != nil {
+				t.Errorf("InstanceExists: unexpected error: %v", err)
+			}
+			if !exists {
+				t.Errorf("InstanceExists: expected true for node without provider ID")
+			}
+
+			shutdown, err := instances.InstanceShutdown(context.TODO(), node)
+			if err != nil {
+				t.Errorf("InstanceShutdown: unexpected error: %v", err)
+			}
+			if shutdown {
+				t.Errorf("InstanceShutdown: expected false for node without provider ID")
+			}
+
+			meta, err := instances.InstanceMetadata(context.TODO(), node)
+			if err == nil {
+				t.Errorf("InstanceMetadata: expected an error for node without provider ID, got %+v", meta)
+			}
+			if meta != nil {
+				t.Errorf("InstanceMetadata: expected nil metadata, got %+v", meta)
+			}
+		})
+	}
+}
+
+func TestInstancesV2_WithProviderIDStillQueriesVultr(t *testing.T) {
+	instances := newInstancesV2(newFakeClient())
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "k8s-node-7"},
+		Spec:       v1.NodeSpec{ProviderID: "vultr://75b95d83-47e2-4c0f-b273-cc9ce2b456f8"},
+	}
+
+	meta, err := instances.InstanceMetadata(context.TODO(), node)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta.ProviderID != "vultr://75b95d83-47e2-4c0f-b273-cc9ce2b456f8" {
+		t.Errorf("unexpected provider ID %q", meta.ProviderID)
 	}
 }
