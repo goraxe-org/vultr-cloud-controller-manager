@@ -1,3 +1,10 @@
+## [0.10.7](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.6...v0.10.7) (2026-10-15)
+
+
+### Bug Fixes
+
+* **deps:** bump vulnerable Go modules and pin patched Alpine packages ([#8](https://github.com/goraxe-org/vultr-cloud-controller-manager/issues/8)) ([9252c93](https://github.com/goraxe-org/vultr-cloud-controller-manager/commit/9252c93f474c22c8f11d11544bc28c9da6c095a9))
+
 ## [0.10.6](https://github.com/goraxe-org/vultr-cloud-controller-manager/compare/v0.10.5...v0.10.6) (2026-09-25)
 
 
